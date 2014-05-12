@@ -1,0 +1,31 @@
+\name{KfoldCV}
+\alias{KfoldCV}
+\title{Split a dataset into k parts for k-fold cross-validation}
+\usage{
+KfoldCV(n, k)
+}
+\arguments{
+  \item{n}{The sample size}
+
+  \item{k}{The number of folds. k=n would mean a
+  leave-one-out cross-validation}
+}
+\value{
+A integer vector of same length as n. Each observation is
+an integer taking a value between 1 to k denoting the fold
+it belongs to.
+}
+\description{
+Split a dataset into k parts for k-fold cross-validation.
+This function is used in \code{pact.cv} to create the
+cross-validation splits
+}
+\examples{
+KfoldCV(15,3)
+KfoldCV(15,15)
+}
+\author{
+Jyothi Subramanian and Richard Simon \cr Maintainer: Jyothi
+Subramanian <\email{subramanianj01@gmail.com}>
+}
+

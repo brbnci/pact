@@ -1,0 +1,72 @@
+\name{overall.analysis}
+\alias{overall.analysis}
+\title{Overall statistics and inference}
+\usage{
+overall.analysis(p)
+}
+\arguments{
+  \item{p}{An object of class \code{pact}}
+}
+\value{
+An list with the following components. As a side effect,
+these are also printed on screen
+
+\item{family}{The response variable type used}
+
+\item{nobs}{The sample size}
+
+\item{n.E}{Number of subjects getting the new treatment}
+
+\item{n.C}{Number of subjects getting the control
+treatment}
+
+\item{nCovar}{The number of predictor variables}
+
+\item{Covar.names}{The names of predictor variables}
+
+\item{LR}{The log-rank statistic for the overal difference
+in survival between E and C groups (for family="cox")}
+
+\item{LR.pval}{The p-value for LR based on the log-rank
+test (for family="cox")}
+
+\item{RR.E}{The response rate for group treated with E (new
+treatment) (for family="binomial")}
+
+\item{RR.C}{The response rate for group treated with C
+(Control) (for family="binomial")}
+
+\item{RRdiff.pval}{The chi-square test based pvalue for the
+difference in response rates (for family="binomial")}
+}
+\description{
+Produces some statistics for the overall (non-predictive)
+comparison of the E and C for the same dataset for which
+the predictive model \code{pact.fit} was developed.
+}
+\details{
+Statistics for the overall comparison of the E and C is
+produced for the the data from a randomized clinical trial.
+The input is an object of class \code{pact}.
+}
+\examples{
+data(prostateCancer)
+Y <- prostateCancer[,3:4]
+X <- prostateCancer[,5:9]
+Treatment <- prostateCancer[,2]
+p <- pact.fit(Y=Y, X=X, Treatment=Treatment, family="cox")
+overall.analysis(p)
+
+### Binary response
+data(EORTC10994)
+Y <- EORTC10994[,4]
+X <- EORTC10994[,c(2,5:7)]
+Treatment <- EORTC10994[,3]
+p <- pact.fit(Y=Y,X=X,Treatment=Treatment,family="binomial")
+}
+\author{
+Jyothi Subramanian and Richard Simon \cr Maintainer: Jyothi
+Subramanian <\email{subramanianj01@gmail.com}>
+}
+\keyword{pact}
+

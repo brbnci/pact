@@ -1,0 +1,209 @@
+\documentclass[11pt, a4paper]{article}
+\usepackage[a4paper,margin=1.25in,footskip=0.25in]{geometry}
+\usepackage{parskip}
+\usepackage{times}
+\renewcommand{\baselinestretch}{1.5} 
+
+% \VignetteIndexEntry{Predictive Analysis of Clinical Trials}
+
+\title{{\tt pact}: Predictive Analysis of Clinical Trials}
+\author{Richard Simon\\
+Jyothi Subramanian}
+
+\begin{document}
+\SweaveOpts{concordance=TRUE}
+\SweaveOpts{width=8,height=6}
+\DefineVerbatimEnvironment{Sinput}{Verbatim}{xleftmargin=2em}
+\DefineVerbatimEnvironment{Soutput}{Verbatim}{xleftmargin=2em}
+\DefineVerbatimEnvironment{Scode}{Verbatim}{xleftmargin=2em}
+\fvset{listparameters={\setlength{\topsep}{0pt}}}
+\renewenvironment{Schunk}{\vspace{\topsep}}{\vspace{\topsep}}
+
+\maketitle
+\section{Introduction}
+The objective of this vignette is to demonstrate the the {\tt pact} R package. The methodology behind the functions in {\tt pact} will also be described briefly. For a more thorough scientific description of {\tt pact}, the reader is referred to \cite{pact_rich}. 
+
+\section{Outline of Methodology}
+Based on response and covariate data from a randomized clinical trial comparing a new experimental treatment E versus a control C, the purpose behind the functions in {\tt pact} is to develop and internally validate a classifier that can identify subjects likely to benefit from E rather than C. Currently, survival and binary response types are permitted.
+
+In the case of a survival response, a Cox proportional hazards (PH) regression model is developed in the full dataset using subjects in both E and C groups. Main effect of treatment, main effect of covariates and treatment by covariate interactions are considered for the model development:
+\begin{equation}
+\log\left[\frac{h(t)}{h_0(t)}\right]=\alpha z + \bar{\beta}^{'}\bar{x} + \bar{\gamma}^{'} z\bar{x}
+\end{equation}
+Here $z$ is a treatment indicator with $z = 0$ for for subjects assigned to group C and $z = 1$ for subjects assigned to group E. $\bar{x}$ denotes the vector of covariates. Model (1) can be fit by maximizing the penalized log partial likelihood. The difference in the log hazard for a subject
+with covariate vector $\bar{x}$	receiving treatment E compared to receiving treatment C is estimated by $\delta(\bar{x}) = \hat{\alpha} + \hat{\bar{\gamma}^{'}}\bar{x}$. $\delta(\bar{x})$ is referred as the {\it predictive score} for the subject with covariate vector $\bar{x}$. Lower predictive scores are indicative of benefit with E. 
+
+The evaluation of the model is done using K-fold cross-validation (CV). In each CV fold, the PH model (1) is developed from the training set and estimates $\hat{\alpha}$ and $\hat{\bar{\gamma}}$ are found. These estimates are used to calculate the predictive scores for subjects in the test set. This is repeated for all folds of the cross-validation so that predictive scores are obtained for all the subjects. Various evaluation measures are calculated from these cross-validated predictive scores.
+
+In the case of a binary response variable, a logistic regression model is developed instead of a PH regression model:
+\begin{equation}
+\log\left[\frac{p}{1-p}\right]=\alpha z + \bar{\beta}^{'}\bar{x} + \bar{\gamma}^{'} z\bar{x}
+\end{equation}
+Here $p$ is the probability of a response. The other steps remain the same. However, in the  case of a binary response, higher predictive scores are indicative of benefit of E.
+
+<<echo=false>>=
+options(width=72)
+options(continue=" ")
+@
+
+\section{Usage and Examples}
+\subsection{Survival Response}
+The usage of {\tt pact} for a dataset with survival response variable is illustrated with the prostate cancer data set. This dataset contains treatment and survival information for 485 subjects with prostate cancer. First we load the dataset.
+
+<<>>=
+library("pact")
+data("prostateCancer")
+head(prostateCancer)
+@
+
+The next step is to set up the response $Y$, the predictor $X$ and the 'Treatment' variables. For a survival type response, $Y$ should be a $n$ row, two-column matrix with columns named 'time' and 'status'. 'time' is the column of survival times and 'status' is a binary variable, with '1' indicating death, and '0' indicating right censored. $X$ is the $n$ by $p$ dataframe of predictor variables to be used for model development. All variables in the dataframe are used in the model, no variable selection is done. Each row in $Y$ and $X$ corresponds to the data for a subject and each column in $X$ is a covariate. Additionally, 'Treatment' is an $n$ length treatment indicator vector with a $1$ indicating that the subject was administered new treatment E and $0$ indicating that the subject was administered the control drug C.
+
+<<>>=
+Y <- prostateCancer[,3:4]
+X <- prostateCancer[,5:9]
+Treatment <- prostateCancer[,2]
+@
+
+Once the variables for the model are defined, a predictive model can be fit to the full dataset. The result of the model fit is an object of class {\tt pact}. Objects of class {\tt pact} have 'summary', 'print' and 'predict' methods defined.
+
+<<>>=
+### Fit predictive model
+p1 <- pact.fit(Y=Y, X=X, Treatment=Treatment, family="cox") 
+### And display it
+summary(p1)
+print(p1)
+@
+
+Cross-validated predictive scores can be obtained for all subjects in the dataset by running a K-fold CV procedure to objects of class {\tt pact}. Unbiased evaluations of the predictions can be obtained from the cross-validated scores using various evaluation options in the function {\tt eval.pact.cv}.
+
+In {\tt eval.pavt.cv} with {\tt method="discrete"}, the user specifies a value for the cutpoint {\tt g} to be applied to the cross-validated score to determine whether the patient can be considered to benefit from E or not. Since the predictive scores represents the change in the log hazard with E as compared to C, a cutoff log(0.80), for example, implies that subjects predicted to receive at least 20\% reduction in HR with E are classified to benefit from E. Kaplan-Meier curves by treatment received are plotted for the subjects predicted to be in the 'benefit' and 'no benefit' groups (Figure \ref{fig:one}). Log-rank statistics are also computed for the 'benefit' and 'no benefit' groups.
+
+Instead, if {\tt method="continuous"} option is specified in {\tt eval.pact.cv}, a PH model that includes the main effect of treatment, main effect of cross-validated score, and treatment x score interaction is fit to the full dataset. From this model, two plots can be generated. The first plot (obtained by specifying {\tt plot.score=TRUE}) consists of KM curves by treatment for the 20\%, 40\%, 60\% and 80\% quantiles of the cross-validated predictive scores and depicts the differential effect of treatment as function of the score (Figure \ref{fig:two}). The second plot that can be generated is the plot of the probability of survival beyond user specified landmark time as a function of the predictive score and treatment (obtained by specifying the landmark time for the option {\tt plot.time}) (Figure \ref{fig:three}). The regression model is also returned.
+
+<<label=figplot1,include=FALSE,eval=FALSE>>=
+### Cross-validate the model
+cv1 <- pact.cv(p1, nfold=5)
+### And evaluate it with method="discrete"
+e1 <- eval.pact.cv(cv1, method="discrete", g=log(0.80), 
+                   perm.test=FALSE, nperm=100)
+@
+
+\begin{figure}
+\begin{center}
+<<label=fig1,fig=TRUE,echo=FALSE>>=
+<<figplot1>>
+@
+\end{center}
+\caption{Figures after evaluation with {\tt method="discrete"}}
+\label{fig:one}
+\end{figure}
+
+<<label=figplot2,include=FALSE>>=
+### Evaluation with method="continuous". No cut-offs here
+### Plot type 1: KM curves are plotted at the 20%, 40%, 60% and  
+### 80% quantiles of the cross-validated treatment scores
+e2 <- eval.pact.cv(cv1, method="continuous", plot.score=TRUE,  
+                  perm.test=FALSE, nperm=100)
+@
+
+\begin{figure}
+\begin{center}
+<<label=fig2,fig=TRUE,echo=FALSE>>=
+<<figplot2>>
+@
+\end{center}
+\caption{Figures after evaluation with {\tt method="continuous"} (type 1, plots at quantiles of cross-validated scores)}
+\label{fig:two}
+\end{figure}
+
+<<label=figplot3,include=FALSE>>=
+### Evaluate with method="continuous". 
+### Plot type 2: Probability of survival beyond user specified  
+### landmark time as a function of the predictive score 
+e2 <- eval.pact.cv(cv1, method="continuous", plot.score=FALSE,  
+                   plot.time=36, perm.test=FALSE, nperm=100)
+@
+
+\begin{figure}
+\begin{center}
+<<label=fig3,fig=TRUE,echo=FALSE>>=
+<<figplot3>>
+@
+\end{center}
+\caption{Figures after evaluation with {\tt method="continuous"} (type 2, probability of survival beyond landmark time)}
+\label{fig:three}
+\end{figure}
+
+\subsection{Binary Response}
+The usage of {\tt pact} for a data with binary response variable is illustrated with the EORTC10994 data set. This dataset contains treatment, response and covariate information for 125 subjects with breast cancer. The binary response $Y$, the predictor $X$ and the 'Treatment' variables are then defined.
+
+<<>>=
+data("EORTC10994")
+head(EORTC10994, n=4)
+Y <- EORTC10994[,4]
+X <- EORTC10994[,c(2,5,6,7)]
+Treatment <- EORTC10994[,3]
+@
+
+For fitting the predictive model for a binary response, the option is {\tt family="binomial"}. As in the case of survival response, the predictive model can be evaluated using K-fold CV. With {\tt method="discrete"} option in {\tt eval.pact.cv}, the cross-validated estimates of response rates with E and T are displayed for the subset predicted to benefit, as well as the subset predicted to not benefit from E. With the option of evaluation using {\tt method="continuous"}, a logistic regression model that includes the main effect of treatment, main effect of cross-validated score, and treatment x score interaction is fit to the full dataset. Based on this model, a graph is produced depicting the probability of response as a function of the predictive score and treatment (Figure \ref{fig:four}). The regression model is also returned.
+
+<<>>=
+### Fit predictive model
+p2 <- pact.fit(Y=Y, X=X, Treatment=Treatment, family="binomial") 
+### And display it
+summary(p2)
+### And evaluate the model using K-fold CV
+cv2 <- pact.cv(p2, nfold=5)
+e1 <- eval.pact.cv(cv2, method="discrete", g=log(1.2), perm.test=FALSE, 
+             nperm=100)
+@
+
+<<label=figplot4,include=FALSE>>=
+### Evaluation for binary response with method="continuous". 
+### Plot: Probability of response as a function of cross-validated
+### predictive score 
+e2 <- eval.pact.cv(cv2, method="continuous", perm.test=FALSE, 
+                   nperm=100)
+@
+
+\begin{figure}
+\begin{center}
+<<label=fig4,fig=TRUE,echo=FALSE>>=
+<<figplot4>>
+@
+\end{center}
+\caption{Figure after evaluation with {\tt method="continuous"}: probability of response as a function of predictive score}
+\label{fig:four}
+\end{figure}
+
+\subsection{Permutation Tests for Treatment Effects}
+Permutation based testing for differential treatment effects can be done by specifying {\tt perm.test=TRUE} in {\tt eval.pact.cv}. The number of permutations can be set using the {\tt nperm} option. At least 500 to 1000 permutations are recommended.
+\subsubsection{Evaluation Method: Discrete}
+In the case of a survival response, permutation based p-values are computed for the log rank statistic for the subset predicted to 'benefit' as well as for the subset predicted 'no benefit' from E. 
+
+For the binary response case, permutation based p-values are computed for testing the null hypothesis that response rates are the same with new and control treatments. A chi-square test statistic is used. Permutation p-values are computed for both subsets predicted to 'benefit' as well as 'not benefit' from E.
+\subsubsection{Evaluation Method: Continuous}
+If {\tt method="continuous"} is chosen in {\tt eval.pact.cv}, a permutation based test is performed for the null hypothesis that the treatment x score interaction coefficient is zero. 
+
+<<label=perm, include=FALSE>>=
+### Permutation test example (survival response)
+e1 <- eval.pact.cv(cv1, method="discrete", g=log(1.1), perm.test=TRUE, 
+             nperm=500)
+### Permutation test output: method="discrete"
+e1
+e2 <- eval.pact.cv(cv1, method="continuous", perm.test=TRUE, 
+                   nperm=500)
+### Permutation test output: method="continuous"
+e2
+@
+
+\begin{thebibliography}{9}
+
+  \bibitem{pact_rich}
+	  Simon R,
+	  \emph{Clinical Trials for Predictive Medicine}
+	  Stat Med. 2012;31(25):3031-40.
+
+\end{thebibliography}
+
+\end{document}
