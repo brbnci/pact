@@ -1,24 +1,21 @@
 #########################################################################
 #								                                                        #
-# Main R function for predictive analysis of clinical trials (PACT)     #
-# This function handles the low dimensional case for both survival or   #
-# a binary response variable.                                           #
+# R functions for the Predictive Analysis of Clinical Trials R package  #
+# These functions handle the low dimensional as well as the high        #
+# dimensional case for both survival or a binary response variable.     #                                          #
 # 				                                                              #
 #                                                                       #
-# See the Readme file (PACT_Readme.doc) for details on the methodology  #
-# and usage details.			                                              #
 # Authors: Richard Simon and Jyothi Subramanian	                        #
 #			                                                                  #           
 #      	                                               		              #
-# Nov-8-2012		                                                        #
-#   o  First version.       	                                          #
-# Nov-21-2012							                                              #
-#   o Second version.					                                          #
-#								                                                        #
+# Nov-2012		                                                          #
+#   o Initial programs      	                                          #
 # Feb-21-2013                                                           #
-#   o Third version - for Shiny app development                         #
+#   o Version for Shiny app development                                 #
 # Nov-14-2013							                                              #
-#   o Version for R package development				                          #
+#   o Version 0.1 for R package development			                        #
+# May-12-2014                                                           #
+#   o Version 0.2 - start to incorporate high dimensional case          #
 #########################################################################
 
 
@@ -34,13 +31,14 @@
 #'@details
 #' Package: pact
 #' \cr Type: Package
-#' \cr Version: 0.1
+#' \cr Version: 0.2
 #' \cr Date: 2014-04-30
 #' \cr Author: Dr. Jyothi Subramanian and Dr. Richard Simon
 #' \cr Maintainer: Jyothi Subramanian <\email{subramanianj01@@gmail.com}>
 #' \cr License: GPL-2
 #' \cr\cr \code{pact.fit} fits a predictive model to a data from a RCT. Currently, 'survival' and 
-#' 'binary' response types are supported. An object of class 'pact' is returned. 
+#' 'binary' response types are supported. High and low dimensional covariate data are supported.
+#' An object of class 'pact' is returned. 
 #' \code{print}, \code{summary} and \code{predict} methods are available for objects of 
 #' class 'pact'.
 #' The function \code{pact.cv} takes as an input the object returned by \code{pact.fit} 
@@ -48,7 +46,7 @@
 #' Evaluations of the cross-validated predictions are performed by the function \code{eval.pact.cv}. 
 #' \cr\cr  Finally, the function \code{overall.analysis}
 #' also takes an object of class 'pact' as input and computes some summary statistics 
-#' f the comparison of treatments E and C.
+#' for the comparison of treatments E and C.
 #' @docType package
 #' @name pact
 #' @examples
@@ -58,7 +56,7 @@
 #' Y <- prostateCancer[,3:4]
 #' X <- prostateCancer[,5:9]
 #' Treatment <- prostateCancer[,2]
-#' p <- pact.fit(Y=Y,X=X,Treatment=Treatment,family="cox")
+#' p <- pact.fit(Y=Y,X=X,Treatment=Treatment,family="cox",varSelect="none")
 #' print(p)
 #' overall.analysis(p)
 #' cv <- pact.cv(p, nfold=5)
@@ -70,12 +68,24 @@
 #' Y <- EORTC10994[,4]
 #' X <- EORTC10994[,c(2,5:7)]
 #' Treatment <- EORTC10994[,3]
-#' p <- pact.fit(Y=Y,X=X,Treatment=Treatment,family="binomial")
+#' p <- pact.fit(Y=Y,X=X,Treatment=Treatment,family="binomial",varSelect="none")
 #' print(p)
 #' overall.analysis(p)
 #' cv <- pact.cv(p, nfold=5)
 #' eval.pact.cv(cv, method="discrete", g=log(1), perm.test=FALSE, nperm=100)
 #' 
+#' ### High dimensional data, survival response
+#' set.seed(1)    
+#' data(GSE10846)     
+#' Y <- GSE10846[,1:2]
+#' X <- GSE10846[,-c(1:3)]
+#' Treatment <- GSE10846[,3]
+#' p <- pact.fit(Y=Y,X=X,Treatment=Treatment,family="cox",varSelect="univar")
+#' print(p)
+#' overall.analysis(p)
+#' cv <- pact.cv(p, nfold=5)
+#' eval.pact.cv(cv, method="continuous", plot.score=TRUE, perm.test=FALSE, nperm=100)
+#'
 NULL
 
 #' @title Fits a predictive model to the full dataset
@@ -89,8 +99,15 @@ NULL
 #' A Cox proportional hazards (PH) regression or a logistic regression model is 
 #' developed for data with survival and binary response respectively. Data from subjects 
 #' in both 'experimental' (E) and 'control' (C) groups from a RCT is used for model
-#' development. Main effect of treatment, main effect of covariates and all treatment by 
-#' covariate interaction terms are considered in the model development.  
+#' development. Main effect of treatment, main effect of covariates and treatment by 
+#' covariate interaction terms are considered in the model. Methods for variable selection  
+#' can be optionally specified by the user. Current options for variable selection include 
+#' "univar" and "lasso". In the case of "univar", the number of variables to be included in 
+#' model is spedified by the user. In the case of "lasso", an internal cross-validation loop
+#' is used to find the penalty value that minimizes the cross-validated error. The user can 
+#' choose either the value of the penalty lambda as the penalty that minimizes the 
+#' cross-validated  error ("lambda.min") or the largest penalty for which the cross-validated  
+#' error is within 1 standard error of the minimum ("lambda.1se").
 #' 
 #' @param Y Response variable. For \code{family='binomial'}, Y should be a factor with two 
 #' levels. For \code{family='cox'}, Y should be a two-column matrix with columns named 'time' 
@@ -102,6 +119,12 @@ NULL
 #' '0' indicating control (C) and '1' indicating experimental (E) treatment.
 #' @param family Type of the response variable. See above. Possible values are 'binomial'
 #' or 'cox'.
+#' @param varSelect The variable selection method. Can be one of "none","univar" or "lasso".
+#' @param nsig The number of covariates to use in the model for varSelect="univar". 
+#' Default is 10.
+#' @param cvfolds.varSelect The number of folds in the internal cross-validation loop for
+#' variable selection with varSelect="lasso". Default is 5.
+#' @param which.lambda Used with variable selection with varSelect="lasso". See Details.
 #' 
 #' @return An object of class 'pact' which is a list with the following components
 #' @return \item{reg}{The fitted regression model}
@@ -109,6 +132,9 @@ NULL
 #' @return \item{Y}{The response variable used}
 #' @return \item{X}{The dataframe of predictor variables used}
 #' @return \item{Treatment}{The treatment assignment indicator used}
+#' @return \item{nCovar}{The number of variables in X} 
+#' @return \item{varSelect}{The variable selection method used}
+#' @return \item{nsig, cvfolds.varSelect, which.lambda}{The variable selection parameters used}
 #' @return \item{call}{The call that produced the return object}
 #' 
 #' @keywords pact, pact.fit
@@ -120,113 +146,155 @@ NULL
 #' Y <- prostateCancer[,3:4]
 #' X <- prostateCancer[,5:9]
 #' Treatment <- prostateCancer[,2]
-#' pact.fit(Y=Y, X=X, Treatment=Treatment, family="cox")
+#' pact.fit(Y=Y, X=X, Treatment=Treatment, family="cox",varSelect="none")
 
 # Fits a predictive model to the full data set and returns an object of class 'pact', 
 # which is actually a list 
 
-pact.fit <- function(Y, X, Treatment, family = c("binomial", "cox")) {
+pact.fit <- function(Y, X, Treatment, family=c("binomial", "cox"),
+                     varSelect=c("none","univar","lasso"),  
+                     nsig=ifelse(varSelect == "univar", ifelse(nCovar < 10,3,10), NA),
+                     cvfolds.varSelect=ifelse(varSelect == "lasso", 5, NA), 
+                     which.lambda=ifelse(varSelect == "lasso", ifelse(nCovar < 10,"min","1se"), NA)) {
   family <- match.arg(family)
+  varSelect <- match.arg(varSelect)
   this.call <- match.call()
   if (!inherits(X, "data.frame")) 
     stop("X should be a data frame")
  
+  dimy <- dim(as.matrix(Y))
+  nobs <- dimy[1]
+  if (nobs == 1) stop("You really want to develop a model with data on just 1 subject?!")
   dimx <- dim(X)
   nrowx <- ifelse(is.null(dimx), length(X), dimx[1])
-  dimy <- dim(Y)
-  nrowy <- ifelse(is.null(dimy), length(Y), dimy[1])
-  if (nrowx != nrowy) 
-    stop(paste("number of observations in Y (", nrowy, ") not equal to the number of rows of X (", 
+  nCovar <- ifelse(is.null(dimx), 1, dimx[2])
+  
+  if (nrowx != nobs)
+    stop(paste("number of subjects in Y (", nobs, ") not equal to the number of subjects in X (", 
                nrowx, ")", sep = ""))
-  nobs <- nrowy
   
   Treatment <- as.factor(Treatment)  
   if (!all(match(levels(Treatment), c(0,1),0))) 
     stop("'Treatment' should be a factor with two levels '0' and '1'. See Usage.")
   if (length(Treatment) != nobs)
-    stop(paste("number of observations in Treatment (", length(Treatment), ") not equal to the number of rows of X (", 
-               nrowx, ")", sep = ""))
+    stop(paste("number of subjects with Treatment info (", length(Treatment), ") 
+               not equal to the number of subjects in X and Y (", nobs, ")", sep = ""))
   
   res <- switch(family, 
-    cox = .pact.fit.survival(Y, X, Treatment),
-    binomial = .pact.fit.binary(Y, X, Treatment))
+                  cox = .pact.fit.survival(Y, X, Treatment, nCovar, varSelect, nsig, cvfolds.varSelect),
+                  binomial = .pact.fit.binary(Y, X, Treatment, nCovar, varSelect, nsig, cvfolds.varSelect))
   res$Y <- Y
   res$X <- X
   res$Treatment <- Treatment
+  res$nCovar <- nCovar
+  res$varSelect <- varSelect
+  res$nsig <- nsig
+  res$cvfolds.varSelect <- cvfolds.varSelect
+  res$which.lambda <- which.lambda
   res$call <- this.call
   class(res) <- "pact"
   res
 }
  
 ### Internal function. 'pact.fit' for the "cox" family.
-.pact.fit.survival <- function(Y, X, Treatment) {
+.pact.fit.survival <- function(Y, X, Treatment, nCovar, varSelect, nsig, cvfolds.varSelect) {
   if (!all(match(c("time", "status"), dimnames(Y)[[2]], 0))) 
     stop("Cox model requires a matrix with columns 'time' (>0) and 'status'  (binary) 
          as a response")
-  if (any(Y[, "time"] < 0)) 
-    stop("negative event times encountered; not permitted for Cox family")
+  if (any(Y[, "time"] <= 0)) 
+    stop("non-positve event times encountered; not permitted for Cox family")
   
   SurvObj <- Surv(Y[,"time"], Y[,"status"])
-  Covar <- X
-  dimx <- dim(X)
-  nCovar <- ifelse(is.null(dimx), 1, dimx[2])
- 
   T <- Treatment
-  tag <- 0
-  tryCatch(CoxReg <- coxph(SurvObj ~ T + . + T:., Covar, na.action="na.exclude"), 
-           error=function(err) tag <<- 1)
 
-  if (tag == 0) {
-      #### Predictions (Resubstitution) for the training set, only to find the model for future application
-    LinPred <- predict(CoxReg, type="lp")
-      #### Now predicting for inverted treatment assignment
-    T <- as.factor(ifelse((T == 1), 0, 1))
-    InvLinPred <- predict(CoxReg, cbind(T,Covar), type="lp")
-      #### (log HR for T=1 - log HR for T=0)
-    PredScore <- ifelse((T == 0), LinPred - InvLinPred, InvLinPred - LinPred)
-    missing.predscore <- sum(is.na(PredScore)) > 0	#### Any missing predscores?
-  } else  { ### if Cox model failed to fit on the full dataset, no point in doing anything further
-    PredScore <- NA
-    stop("Predictive model cannot be developed using the given dataset")
+  if (varSelect == "none") {  ## No variable selection 
+    cat("No variable selection: All variables in X used in the model...\n")
+    tag <- 0
+    tryCatch(CoxReg <- coxph(SurvObj ~ T + . + T:., X, na.action="na.exclude"), 
+             error=function(err) tag <<- 1)
+    ### No need to calculate resubstitution PredScores for the same dataset - deleted from prev version
+    if (tag == 1) stop("Predictive model cannot be developed using the given dataset.")
+  }
+  
+  if (varSelect == "univar") {  ## univariate variable selection
+    cat("Variable selection: Univariate method...\n")
+    pval <- .varSelect.uni(Y, X, Treatment, nCovar, family="cox")
+    Covar <- X[,order(pval)[1:nsig]]
+    tag <- 0
+    tryCatch(CoxReg <- coxph(SurvObj ~ T + . + T:., Covar, na.action="na.exclude"), 
+             error=function(err) tag <<- 1)
+    ### No need to calculate resubstitution PredScores for the same dataset
+    if (tag == 1) stop("Predictive model cannot be developed with this variable selection. Try 'lasso'.")
+  } 
+  
+  if (varSelect == "lasso") {  ## lasso selection
+    cat("Variable selection: lasso...\n")
+    mf <- model.frame(~ T+.+T:., X)
+    mm <- model.matrix(~ T+.+T:., mf)
+    mm <- mm[,-1]
+    penalty <- c(0,rep(1,ncol(mm)-1)) ## 'Treatment' is always in the model
+    CoxReg <- glmnet(mm, SurvObj, family="cox", alpha=1, penalty.factor=penalty)
+    tag <- 0
+    tryCatch(cv <- cv.glmnet(mm, SurvObj, family="cox", alpha=1, penalty.factor=penalty, 
+                       nfolds=cvfolds.varSelect), error=function(err) tag <<- 1)
+    if (tag == 1) stop("Predictive model cannot be developed with variable selection 'lasso'. Try 'univariate'.")
+    CoxReg$lambda.min <- cv$lambda.min
+    CoxReg$lambda.1se <- cv$lambda.1se 
   }
   res <- list(reg=CoxReg, family="cox")
   res
-} 
+  } 
 
-### Internal function. 'pact.fit' for the "binomial" family.
-.pact.fit.binary <- function(Y, X, Treatment) {  
-  nc = dim(Y)
+### Internal function. 'pact.fit' for the "binomial" family. 
 
-  if (is.null(nc)) {
-    Y = as.factor(Y)
+.pact.fit.binary <- function(Y, X, Treatment, nCovar, varSelect, nsig, cvfolds.varSelect) {  
+  dimy = dim(as.matrix(Y))
+  nc <- dimy[2]
+  
+  if (nc == 1) {
+    Response = as.factor(Y)
     ntab = table(Y)
     classnames = names(ntab)
   }
   else {
-    stop("For binomial family, Y must be a factor with two levels, higher dimensions for Y currently not supported")
+    stop("For binomial family, Y must be a factor with two levels, other dimensions for Y currently not supported")
   }
-
   T <- Treatment
-  Response <- Y
-  Covar <- X
-  dimx <- dim(X)
-  nCovar <- ifelse(is.null(dimx), 1, dimx[2])
   
-  tag <- 0
-  tryCatch(LogReg <- glm(Response ~ T + . + T:., Covar, family = binomial(link = "logit"), na.action="na.exclude")
-               , error=function(err) tag <<- 1)
-  if (tag == 0) {
-      ### Predictions (Resubstitution) for the training set, only to find the model and cut-point for future application
-    LinPred <- predict(LogReg, type="link")
-      #### Now predicting for inverted treatment assignment
-    T <- as.factor(ifelse((T == 1),0,1))
-    InvLinPred <- predict(LogReg, cbind(T,Covar), type="link")
-      #### (log odds for T=1 - log odds for T=0)
-    PredScore <- ifelse((T == 0), LinPred - InvLinPred, InvLinPred - LinPred)
-    missing.predscore <- sum(is.na(PredScore)) > 0	#### Any missing pred scores?
-  } else  { ### if logistic model failed to fit, no point doing anything further
-    PredScore <- NA
-    stop("Predictive model cannot be developed using the given dataset")
+  if (varSelect == "none") {  ## No variable selection 
+    cat("No variable selection: All variables in X used in the model...\n")
+    tag <- 0
+    tryCatch(LogReg <- glm(Response ~ T + . + T:., X, family = binomial(link = "logit"), na.action="na.exclude")
+             , error=function(err) tag <<- 1)
+    ### No need to calculate resubstitution PredScores for the same dataset - deleted from prev version
+    if (tag == 1) stop("Predictive model cannot be developed using the given dataset.")
+  }
+  
+  if (varSelect == "univar") {  ## univariate variable selection
+    cat("Variable selection: Univariate method...\n")
+    pval <- .varSelect.uni(Y, X, Treatment, nCovar, family="binomial")
+    Covar <- X[,order(pval)[1:nsig]]
+    tag <- 0
+    tryCatch(LogReg <- glm(Response ~ T + . + T:., Covar, family = binomial(link = "logit"), na.action="na.exclude"), 
+             error=function(err) tag <<- 1)
+    ### No need to calculate resubstitution PredScores for the same dataset
+    if (tag == 1) stop("Predictive model cannot be developed with this variable selection. Try 'lasso'.")
+  } 
+  
+  if (varSelect == "lasso") {  ## lasso selection
+    cat("Variable selection: lasso...\n")
+    mf <- model.frame(~ T+.+T:., X)
+    mm <- model.matrix(~ T+.+T:., mf)
+    mm <- mm[,-1]
+    penalty <- c(0,rep(1,ncol(mm)-1)) ## 'Treatment' is always in the model
+    LogReg <- glmnet(mm, Response, family="binomial", alpha=1, penalty.factor=penalty)
+    tag <- 0
+    tryCatch(cv <- cv.glmnet(mm, Response, family="binomial", alpha=1, penalty.factor=penalty, 
+                                     nfolds=cvfolds.varSelect), 
+             error=function(err) tag <<- 1)
+    if (tag == 1) stop("Predictive model cannot be developed with variable selection 'lasso'. Try 'univariate'.")
+    LogReg$lambda.min <- cv$lambda.min
+    LogReg$lambda.1se <- cv$lambda.1se 
   }
   res <- list(reg=LogReg, family="binomial")
   res
@@ -257,28 +325,52 @@ pact.fit <- function(Y, X, Treatment, family = c("binomial", "cox")) {
 #' Y <- prostateCancer[,3:4]
 #' X <- prostateCancer[,5:9]
 #' Treatment <- prostateCancer[,2]
-#' p <- pact.fit(Y=Y,X=X,Treatment=Treatment,family="cox")
+#' p <- pact.fit(Y=Y, X=X, Treatment=Treatment, family="cox", varSelect="lasso")
 #' print(p)
 
 print.pact <- function(x, digits = max(3, getOption("digits") - 3), ...) {	### x = object of class 'pact'
   reg <- x$reg
-  nInteractions <- (nrow(summary(reg)$coef)-1)/2
-
+  varSelect <- x$varSelect
   cat("\nCall: ", deparse(x$call), "\n\n")
   cat("\nfamily: ", x$family, "\n\n")
-  if (x$family == "cox") { 
-    ClassFn <- paste("(",round(summary(reg)$coef[1,1],digits),")")
-    for( i in 2:(nInteractions+1)) {
-      ClassFn <- paste(ClassFn, "\n", "  +  (",round(summary(reg)$coef[nInteractions+i,1],digits)," )*",row.names(summary(reg)$coef)[i],sep="")
+  
+  if (varSelect != "lasso") {
+    nInteractions <- (nrow(summary(reg)$coef)-1)/2
+    if (x$family == "cox") { 
+      nInteractions <- (nrow(summary(reg)$coef)-1)/2
+      ClassFn <- paste("(",round(summary(reg)$coef[1,1],digits),")")
+      for( i in 2:(nInteractions+1)) {
+        ClassFn <- paste(ClassFn, "\n", "  +  (",round(summary(reg)$coef[nInteractions+i,1],digits)," )*",row.names(summary(reg)$coef)[i],sep="")
+      }
+      cat(paste("\nClassification function for classifying future subjects:\n", "f = ", ClassFn, "\n\n"), sep="")
+    } else if (x$family == "binomial") { ### For binary response (intercept also exists in the model output for binary response)
+      ClassFn <- paste("(",round(summary(reg)$coef[1,1],digits),")")
+      ClassFn <- paste(ClassFn, "\n", "  +  (",round(summary(reg)$coef[2,1],digits)," )")
+      for( i in 3:(nInteractions+2)) {
+        ClassFn <- paste(ClassFn, "\n", "  +  (",round(summary(reg)$coef[nInteractions+i,1],digits)," )*",row.names(summary(reg)$coef)[i],sep="")
+      }
+      cat(paste("\nClassification function for classifying future subjects:\n", "f = ", ClassFn, "\n\n"), sep="")
     }
-    cat(paste("\nClassification function for classifying future subjects:\n", "f = ", ClassFn, "\n\n"), sep="")
-  } else if (x$family == "binomial") { ### For binary response (intercept also exists in the model output for binary response)
-    ClassFn <- paste("(",round(summary(reg)$coef[1,1],digits),")")
-    ClassFn <- paste(ClassFn, "\n", "  +  (",round(summary(reg)$coef[2,1],digits)," )")
-    for( i in 3:(nInteractions+2)) {
-      ClassFn <- paste(ClassFn, "\n", "  +  (",round(summary(reg)$coef[nInteractions+i,1],digits)," )*",row.names(summary(reg)$coef)[i],sep="")
+  } else {  ### if varSelect == "lasso"
+    s <- ifelse(x$which.lambda == "lambda.min", reg$lambda.min, reg$lambda.1se)
+    coeffs <- coef(reg, s=s)
+    nInteractions <- (nrow(coeffs)-1)/2
+    if (x$family == "cox") { 
+      ClassFn <- paste("(",round(coeffs[1],digits),")")
+      for( i in 2:(nInteractions+1)) {
+        if(coeffs[nInteractions+i] != 0)
+          ClassFn <- paste(ClassFn, "\n", "  +  (",round(coeffs[nInteractions+i],digits)," )*",row.names(coeffs)[i],sep="")
+      }
+      cat(paste("\nClassification function for classifying future subjects:\n", "f = ", ClassFn, "\n\n"), sep="")
+    } else if (x$family == "binomial") { ### For binary response intercept also exists
+      ClassFn <- paste("(",round(coeffs[1],digits),")")
+      ClassFn <- paste(ClassFn, "\n", "  +  (",round(coeffs[2],digits)," )")
+      for( i in 3:(nInteractions+2)) {
+        if(coeffs[nInteractions+i] != 0)
+          ClassFn <- paste(ClassFn, "\n", "  +  (",round(coeffs[nInteractions+i],digits)," )*",row.names(coeffs)[i],sep="")
+      }
+      cat(paste("\nClassification function for classifying future subjects:\n", "f = ", ClassFn, "\n\n"), sep="")
     }
-    cat(paste("\nClassification function for classifying future subjects:\n", "f = ", ClassFn, "\n\n"), sep="")
   }
 }
 
@@ -306,7 +398,7 @@ print.pact <- function(x, digits = max(3, getOption("digits") - 3), ...) {	### x
 #' Y <- prostateCancer[,3:4]
 #' X <- prostateCancer[,5:9]
 #' Treatment <- prostateCancer[,2]
-#' p <- pact.fit(Y=Y,X=X,Treatment=Treatment,family="cox")
+#' p <- pact.fit(Y=Y,X=X,Treatment=Treatment,family="cox",varSelect="none")
 #' summary(p)
 #' 
 summary.pact <- function(object, ...) {	### object = object of class 'pact'
@@ -320,7 +412,7 @@ summary.pact <- function(object, ...) {	### object = object of class 'pact'
 #' Predicts the scores for new subjects from a previously developed object of class 'pact'
 #' 
 #' @details
-#' Returns the scores for new subjects from an object of class 'pact', given their coveriate values and 
+#' Returns the scores for new subjects from an object of class 'pact', given their covariate values and 
 #' treatment assignment. 
 #' 
 #' @method predict pact
@@ -343,7 +435,7 @@ summary.pact <- function(object, ...) {	### object = object of class 'pact'
 #' Y <- prostateCancer[1:400,3:4]
 #' X <- prostateCancer[1:400,5:9]
 #' Treatment <- prostateCancer[1:400,2]
-#' p <- pact.fit(Y=Y, X=X, Treatment=Treatment, family="cox")
+#' p <- pact.fit(Y=Y, X=X, Treatment=Treatment, family="cox", varSelect="univar")
 #' 
 #' newx <- prostateCancer[401:410,5:9]
 #' newTreatment <- prostateCancer[401:410,2]
@@ -354,7 +446,7 @@ summary.pact <- function(object, ...) {	### object = object of class 'pact'
 #' Y <- EORTC10994[1:120,4]
 #' X <- EORTC10994[1:120,c(2,5:7)]
 #' Treatment <- EORTC10994[1:120,3]
-#' p <- pact.fit(Y=Y,X=X,Treatment=Treatment,family="binomial")
+#' p <- pact.fit(Y=Y,X=X,Treatment=Treatment,family="binomial",varSelect="none")
 #' 
 #' newx <- EORTC10994[121:125,c(2,5:7)]
 #' newTreatment <- EORTC10994[121:125,3]
@@ -364,8 +456,12 @@ predict.pact <- function(object, newx, newTreatment, ...) {  ### object = object
   if (missing(newx)) {
     stop("You need to supply a value for 'newx'")
   }
+  if (!inherits(newx, "data.frame")) 
+    stop("newx should be a data frame")
+  
   dimx <- dim(newx)
-  nobs <- ifelse(is.null(dimx), length(newx), dimx[1])
+  nobs <- dimx[1]
+  nCovar <- dimx[2]
   
   if (missing(newTreatment)) {
     stop("You need to supply a value for 'newTreatment'")
@@ -374,26 +470,38 @@ predict.pact <- function(object, newx, newTreatment, ...) {  ### object = object
   if (!all(match(levels(T), c(0,1),0))) 
     stop("'newTreatment' should be a factor with two levels '0' and '1'.")
   if (length(newTreatment) != nobs)
-    stop(paste("number of observations in newTreatment (", length(newTreatment), ") not equal to the number of observations in newx (", 
-               nobs, ")", sep = ""))
-  reg <- object$reg  
-  Covar <- newx
-  nCovar <- ifelse(is.null(dimx), 1, dimx[2])
+    stop(paste("number of observations in newTreatment (", length(newTreatment), ") not equal 
+               to the number of observations in newx (", nobs, ")", sep = ""))
   
-  if (object$family == "cox") {
-    LinPred <- predict(reg, cbind(T,Covar), type="lp")
-        #### Now predicting for inverted treatment assignment
-    T <- as.factor(ifelse((T == 1),0,1))
-    InvLinPred <- predict(reg, cbind(T,Covar), type="lp")
-        #### (log HR for T=1 - log HR for T=0)
-    PredScore <- ifelse((T == 0), LinPred - InvLinPred, InvLinPred - LinPred)
-  }
-  else if (object$family == "binomial") { ### For binary response 
-    LinPred <- predict(reg, type="link")
+  ## Can add a check here for the presence of the same variables as in developed model...(26May14)
+  ## No need..check shd be there in the original predict method...(29May2014)
+  
+  reg <- object$reg
+  family <- object$family
+  varSelect <- object$varSelect
+  
+  if (varSelect != "lasso") {
+    type <- ifelse(family == "cox","lp","link")
+    LinPred <- predict(reg, cbind(T,newx), type=type)
       #### Now predicting for inverted treatment assignment
     T <- as.factor(ifelse((T == 1),0,1))
-    InvLinPred <- predict(reg, cbind(T,Covar), type="link")
-      #### (log odds for T=1 - log odds for T=0)
+    InvLinPred <- predict(reg, cbind(T,newx), type=type)
+      #### (log HR/odds for T=1 - log HR/odds for T=0)
+    PredScore <- ifelse((T == 0), LinPred - InvLinPred, InvLinPred - LinPred)
+  }
+  else {  ### varSelect == "lasso"
+    s <- ifelse(object$which.lambda == "lambda.min", reg$lambda.min, reg$lambda.1se)
+    mf <- model.frame(~ T+.+T:., newx)
+    mm <- model.matrix(~T+.+T:., mf)
+    mm <- mm[,-1]
+    LinPred.test <- predict(reg, mm, s=s, type="link")
+    #### Now predicting for inverted treatment assignment
+    T <- as.factor(ifelse((T == 1),0,1))
+    mf <- model.frame(~ T+.+T:., newx)
+    mm <- model.matrix(~T+.+T:., mf)
+    mm <- mm[,-1]
+    InvLinPred.test <- predict(reg, mm, s=s, type="link")
+      #### (log HR/odds for T=1 - log HR/odds for T=0)
     PredScore <- ifelse((T == 0), LinPred - InvLinPred, InvLinPred - LinPred)
   }
   PredScore
@@ -428,6 +536,35 @@ KfoldCV <- function(n,k) { ### Partition a dataset to k parts for k-fold CV
   s
 }
 
+
+### Internal function. Univariate variable selection for the high dim case
+.varSelect.uni <- function(Y, X, Treatment, nCovar, family = c("binomial", "cox")) {
+  Covar <- X
+  T <- Treatment
+  p.uni <- NULL
+  
+  if (family == "cox") {
+  SurvObj <- Surv(Y[,"time"], Y[,"status"])
+    pos <- 3  ## T+var+T*var
+    for (i in 1:nCovar) {
+      tag <- 0
+      tryCatch(t <- coxph(SurvObj ~ T + . + T:., data = data.frame(Covar[, i])), 
+               error=function(err) tag <<- 1)
+      ifelse((tag == 0), p.uni[i] <- summary(t)$coef[pos,5], p.uni[i] <- 1)
+    }
+  } else {	## family = "binomial"
+      Y = as.factor(Y)
+      pos <- 4	## Intercept+T+var+T*var
+      for (i in 1:nCovar) {
+        tag <- 0
+        tryCatch(t <- glm(Y ~ T + . + T:. ,data = data.frame(Covar[, i]), family = binomial(link = "logit")),
+               error=function(err) tag <<- 1)
+        ifelse((tag == 0), p.uni[i] <- summary(t)$coef[pos,4], p.uni[i] <- 1)
+    }
+  }
+  p.uni
+}
+
 #' @title Cross-validation for pact
 #'
 #' @description
@@ -452,6 +589,9 @@ KfoldCV <- function(n,k) { ### Partition a dataset to k parts for k-fold CV
 #' @return \item{X}{The dataframe of predictor variables used}
 #' @return \item{Treatment}{The treatment assignment indicator used}
 #' @return \item{family}{The response variable type}
+#' @return \item{nCovar}{The number of variables in X} 
+#' @return \item{varSelect}{The variable selection method used}
+#' @return \item{nsig, cvfolds.varSelect, which.lambda}{The variable selection parameters used}
 #' @return \item{call}{The call that produced this output}
 #' 
 #' @keywords pact, pact.cv
@@ -463,7 +603,7 @@ KfoldCV <- function(n,k) { ### Partition a dataset to k parts for k-fold CV
 #' Y <- prostateCancer[,3:4]
 #' X <- prostateCancer[,5:9]
 #' Treatment <- prostateCancer[,2]
-#' p <- pact.fit(Y=Y,X=X,Treatment=Treatment,family="cox")
+#' p <- pact.fit(Y=Y,X=X,Treatment=Treatment,family="cox",varSelect="lasso")
 #' cv <- pact.cv(p, nfold=5)
 
 pact.cv <- function(p, nfold) {
@@ -471,39 +611,48 @@ pact.cv <- function(p, nfold) {
     stop("First argument must be an object of class 'pact'.")
   family <- p$family
   this.call <- match.call()
-
+  varSelect <- p$varSelect
+  nsig <- p$nsig
+  cvfolds.varSelect <- p$cvfolds.varSelect
+  which.lambda <- p$which.lambda
+  
   Y <- p$Y
   X <- p$X
   Treatment <- as.factor(p$Treatment)  
+  nCovar <- p$nCovar
   
   dimx <- dim(X)
-  nrowx <- ifelse(is.null(dimx), length(X), dimx[1])
-  dimy <- dim(Y)
-  nrowy <- ifelse(is.null(dimy), length(Y), dimy[1])
-  nobs <- nrowy
-  
+  nobs <- dimx[1]
   nfold <- as.integer(nfold)
   if ((nfold > nobs) || (nfold < 2))
     stop("nfold should be an integer >= 2 but cannot be greater than the number of observations")
   
   #### K-fold CV ####
   res <- switch(family, 
-                cox = .pact.cv.survival(Y, X, Treatment, nfold),
-                binomial = .pact.cv.binary(Y, X, Treatment, nfold))
+                cox = .pact.cv.survival(Y, X, Treatment, nCovar, nfold, varSelect, nsig, 
+                                        cvfolds.varSelect, which.lambda),
+                binomial = .pact.cv.binary(Y, X, Treatment, nCovar, nfold, varSelect, nsig, 
+                                           cvfolds.varSelect, which.lambda))
+  res$Y <- Y
+  res$X <- X
+  res$Treatment <- Treatment
+  res$nCovar <- nCovar
+  res$nfold <- nfold
+  res$varSelect <- varSelect
+  res$nsig <- nsig
+  res$cvfolds.varSelect <- cvfolds.varSelect
+  res$which.lambda <- which.lambda
   res$call <- this.call
   class(res) <- "pact.cv"
   res
 }
 
 ### Internal cross-validation function. For survival response.
-.pact.cv.survival <- function(Y, X, Treatment, nfold) { 
-  ### Evaluation of predictive model using CV, survival response
-  T <- Treatment
+.pact.cv.survival <- function(Y, X, Treatment, nCovar, nfold, varSelect, nsig, cvfolds.varSelect,
+                              which.lambda) { 
   SurvObj <- Surv(Y[, "time"],Y[, "status"])
-  Covar <- X
   dimx <- dim(X)
   nobs <- ifelse(is.null(dimx), length(X), dimx[1])
-  nCovar <- ifelse(is.null(dimx), 1, dimx[2])
   
   #### Generate IDs for K-fold cross-validation
   
@@ -511,26 +660,79 @@ pact.cv <- function(p, nfold) {
   
   #### K-fold CV
   
-  Temp.CVest <- lapply(1:nfold,function(x) { 
-    Ind.train <- which(CV != x)
-    Ind.test <- which(CV == x)
+  Temp.CVest <- lapply(1:nfold,function(i) { 
+    Ind.train <- which(CV != i)
+    Ind.test <- which(CV == i)
     
-    T <- Treatment[Ind.train]
-    tag <- 0
+    if (varSelect == "univar") {  ## univariate var selection
+      T <- Treatment[Ind.train]
+      pval <- .varSelect.uni(Y[Ind.train,], X[Ind.train,], T, nCovar, family="cox")
+      sig.X <- X[,order(pval)[1:nsig]]
+      tag <- 0
+      tryCatch(CoxReg <- coxph(SurvObj[Ind.train] ~ T + . + T:., sig.X[Ind.train,,drop=FALSE], 
+                               na.action="na.exclude"), error=function(err) tag <<- 1)
+      if (tag == 0) {
+          #### Now predict scores for the test set cases using CoxReg and the treatment inversion steps
+        T <- Treatment[Ind.test]
+        LinPred.test <- predict(CoxReg, cbind(T,sig.X[Ind.test,,drop=FALSE]), "lp")
+        T <- as.factor(ifelse((T == 1),0,1))
+        InvLinPred.test <- predict(CoxReg, cbind(T,sig.X[Ind.test,,drop=FALSE]), "lp")
+        PredScore.test <- ifelse((T == 0), LinPred.test - InvLinPred.test, InvLinPred.test - LinPred.test)
+      } else { #### In case the Cox regression model had failed to converge
+        PredScore.test <- NA
+      }
+    }
     
-    ##### Develop a Cox PH regression model using only the training set
+    if (varSelect == "none") {  ## no variable selection
+      T <- Treatment[Ind.train]
+      sig.X <- X
+      tag <- 0
+      tryCatch(CoxReg <- coxph(SurvObj[Ind.train] ~ T + . + T:., sig.X[Ind.train,,drop=FALSE], 
+                               na.action="na.exclude"), error=function(err) tag <<- 1)
+      if (tag == 0) {
+        #### Now predicting for the test set cases using CoxReg and by repeating the treatment inversion steps
+        T <- Treatment[Ind.test]
+        LinPred.test <- predict(CoxReg, cbind(T,sig.X[Ind.test,,drop=FALSE]), "lp")
+        T <- as.factor(ifelse((T == 1),0,1))
+        InvLinPred.test <- predict(CoxReg, cbind(T,sig.X[Ind.test,,drop=FALSE]), "lp")
+        PredScore.test <- ifelse((T == 0), LinPred.test - InvLinPred.test, InvLinPred.test - LinPred.test)
+      } else { #### In case the Cox regression model had failed to converge
+        PredScore.test <- NA
+      }
+    }
     
-    tryCatch(CoxReg <- coxph(SurvObj[Ind.train] ~ T + . + T:., Covar[Ind.train,,drop=FALSE], 
-                             na.action="na.exclude"), error=function(err) tag <<- 1)
-    if (tag == 0) {
-      #### Now predicting for the test set cases using CoxReg and by repeating the treatment inversion steps
-      T <- Treatment[Ind.test]
-      LinPred.test <- predict(CoxReg,cbind(T,Covar[Ind.test,,drop=FALSE]),"lp")
-      T <- as.factor(ifelse((T == 1),0,1))
-      InvLinPred.test <- predict(CoxReg,cbind(T,Covar[Ind.test,,drop=FALSE]),"lp")
-      PredScore.test <- ifelse((T == 0), LinPred.test - InvLinPred.test, InvLinPred.test - LinPred.test)
-    } else { #### In case the Cox regression model failed to converge
-      PredScore.test <- NA
+    if (varSelect == "lasso"){
+      T <- Treatment[Ind.train]
+      tempX <- X[Ind.train,]
+      mf <- model.frame(~ T+.+T:., tempX)
+      mm <- model.matrix(~T+.+T:., mf)
+      mm <- mm[,-1]
+      
+      penalty <- c(0,rep(1,ncol(mm)-1)) ## 'Treatment' is always in the model
+      tag <- 0
+      tryCatch(CoxReg <- glmnet(mm, SurvObj[Ind.train], family="cox", alpha=1, penalty.factor=penalty),
+               error=function(err) tag <<- 1)
+      if (tag == 0) {
+        cv <- cv.glmnet(mm, SurvObj[Ind.train], family="cox", alpha=1, penalty.factor=penalty, 
+                               nfolds=cvfolds.varSelect)
+        s <- ifelse(which.lambda == "lambda.min", cv$lambda.min, cv$lambda.1se)
+          #### Now predict for the test set cases using CoxReg and by repeating the treatment inversion steps
+        tempX <- X[Ind.test,]
+        T <- Treatment[Ind.test]
+        mf <- model.frame(~ T+.+T:., tempX)
+        mm <- model.matrix(~T+.+T:., mf)
+        mm <- mm[,-1]
+        LinPred.test <- predict(CoxReg, mm, s=s, type="link")
+        
+        T <- as.factor(ifelse((T == 1),0,1))
+        mf <- model.frame(~ T+.+T:., tempX)
+        mm <- model.matrix(~T+.+T:., mf)
+        mm <- mm[,-1]
+        InvLinPred.test <- predict(CoxReg, mm, s=s, type="link")
+        PredScore.test <- ifelse((T == 0), LinPred.test - InvLinPred.test, InvLinPred.test - LinPred.test)
+      } else { #### In case the Cox regression model had failed to converge
+        PredScore.test <- NA
+      }
     }
     ifelse((tag == 0), return(PredScore.test), return(NA))
   })
@@ -539,46 +741,98 @@ pact.cv <- function(p, nfold) {
   for(i in (1:nfold)) {
     PredScore[CV == i] <- Temp.CVest[[i]]
   }
-  out.cv <- list(PredScore=PredScore, Y=Y, X=X, Treatment=Treatment, family="cox", nfold=nfold)
+  out.cv <- list(PredScore=PredScore, family="cox")
   out.cv
 }
 
 ### Internal cross-validation function. For binary response.
-.pact.cv.binary <- function(Y, X, Treatment, nfold) { 
-  ### Evaluation of predictive model using CV, binary response
-  T <- Treatment
+
+.pact.cv.binary <- function(Y, X, Treatment, nCovar, nfold, varSelect, nsig, cvfolds.varSelect,
+                            which.lambda) { 
   Response <- Y
-  Covar <- X
   dimx <- dim(X)
   nobs <- ifelse(is.null(dimx), length(X), dimx[1])
-  nCovar <- ifelse(is.null(dimx), 1, dimx[2])
   
   #### Generate IDs for K-fold cross-validation
   
   CV <- KfoldCV(nobs, nfold)
-
+  
   #### K-fold CV
   
-  Temp.CVest <- lapply(1:nfold,function(x) { 
-    Ind.train <- which(CV != x)
-    Ind.test <- which(CV == x)
-
-    T <- Treatment[Ind.train]
-    tag <- 0
+  Temp.CVest <- lapply(1:nfold,function(j) { 
+    Ind.train <- which(CV != j)
+    Ind.test <- which(CV == j)
+    if (varSelect == "univar") {  ## univariate var selection
+      T <- Treatment[Ind.train]
+      pval <- .varSelect.uni(Response[Ind.train], X[Ind.train,], T, nCovar, family="binomial")
+      sig.X <- X[,order(pval)[1:nsig]]
+      tag <- 0
+      tryCatch(LogReg <- glm(Response[Ind.train] ~ T + . + T:., sig.X[Ind.train,,drop=FALSE], 
+                             family = binomial(link = "logit"), na.action="na.exclude"), 
+               error=function(err) tag <<- 1)
+      if (tag == 0) {
+        #### Now predicting for the test set cases using LogReg and by repeating the treatment inversion steps
+        T <- Treatment[Ind.test]
+        LinPred.test <- predict(LogReg, cbind(T,sig.X[Ind.test,,drop=FALSE]), type="link")
+        T <- as.factor(ifelse((T == 1),0,1))
+        InvLinPred.test <- predict(LogReg, cbind(T,sig.X[Ind.test,,drop=FALSE]), type="link")
+        PredScore.test <- ifelse((T == 0), LinPred.test - InvLinPred.test, InvLinPred.test - LinPred.test)
+      } else { #### In case the regression model failed to converge
+        PredScore.test <- NA
+      }
+    }
     
-    ##### Develop a Cox PH regression model using only the training set
-    tryCatch(LogReg <- glm(Response[Ind.train] ~ T + . + T:., Covar[Ind.train,,drop=FALSE], 
-                           family = binomial(link = "logit"), na.action="na.exclude"), error=function(err) tag <<- 1)
- 
-    if (tag == 0) {
-      #### Now predicting for the test set cases using CoxReg and by repeating the treatment inversion steps
-      T <- Treatment[Ind.test]
-      LinPred.test <- predict(LogReg, cbind(T,Covar[Ind.test,,drop=FALSE]),type="link")
-      T <- as.factor(ifelse((T == 1),0,1))
-      InvLinPred.test <- predict(LogReg, cbind(T,Covar[Ind.test,,drop=FALSE]),"link")
-      PredScore.test <- ifelse((T == 0), LinPred.test - InvLinPred.test, InvLinPred.test - LinPred.test)
-    } else { #### In case the Cox regression model failed to converge
-      PredScore.test <- NA
+    if (varSelect == "none") {  ## no variable selection
+      T <- Treatment[Ind.train]
+      sig.X <- X
+      tag <- 0
+      tryCatch(LogReg <- glm(Response[Ind.train] ~ T + . + T:., sig.X[Ind.train,,drop=FALSE], 
+                               family = binomial(link = "logit"), na.action="na.exclude"), 
+               error=function(err) tag <<- 1)
+      if (tag == 0) {
+        #### Now predicting for the test set cases using LogReg and by repeating the treatment inversion steps
+        T <- Treatment[Ind.test]
+        LinPred.test <- predict(LogReg, cbind(T,sig.X[Ind.test,,drop=FALSE]), type="link")
+        T <- as.factor(ifelse((T == 1),0,1))
+        InvLinPred.test <- predict(LogReg, cbind(T,sig.X[Ind.test,,drop=FALSE]), type="link")
+        PredScore.test <- ifelse((T == 0), LinPred.test - InvLinPred.test, InvLinPred.test - LinPred.test)
+      } else { #### In case the regression model had failed to converge
+        PredScore.test <- NA
+      }
+    }
+    
+    if (varSelect == "lasso"){
+      T <- Treatment[Ind.train]
+      tempX <- X[Ind.train,]
+      mf <- model.frame(~ T+.+T:., tempX)
+      mm <- model.matrix(~T+.+T:., mf)
+      mm <- mm[,-1]
+      
+      penalty <- c(0,rep(1,ncol(mm)-1)) ## 'Treatment' is always in the model
+      tag <- 0
+      tryCatch(LogReg <- glmnet(mm, Response[Ind.train], family="binomial", alpha=1, penalty.factor=penalty),
+               error=function(err) tag <<- 1)
+      if (tag == 0) {
+        cv <- cv.glmnet(mm, Response[Ind.train], family="binomial", alpha=1, penalty.factor=penalty, 
+                                 nfolds=cvfolds.varSelect)
+        s <- ifelse(which.lambda == "lambda.min", cv$lambda.min, cv$lambda.1se)
+        #### Now predict for the test set cases using CoxReg and by repeating the treatment inversion steps
+        tempX <- X[Ind.test,]
+        T <- Treatment[Ind.test]
+        mf <- model.frame(~ T+.+T:., tempX)
+        mm <- model.matrix(~T+.+T:., mf)
+        mm <- mm[,-1]
+        LinPred.test <- predict(LogReg, mm, s=s, type="link")
+        
+        T <- as.factor(ifelse((T == 1),0,1))
+        mf <- model.frame(~ T+.+T:., tempX)
+        mm <- model.matrix(~T+.+T:., mf)
+        mm <- mm[,-1]
+        InvLinPred.test <- predict(LogReg, mm, s=s, type="link")
+        PredScore.test <- ifelse((T == 0), LinPred.test - InvLinPred.test, InvLinPred.test - LinPred.test)
+      } else { #### In case the regression model had failed to converge
+        PredScore.test <- NA
+      }
     }
     ifelse((tag == 0), return(PredScore.test), return(NA))
   })
@@ -587,10 +841,9 @@ pact.cv <- function(p, nfold) {
   for(i in (1:nfold)) {
     PredScore[CV == i] <- Temp.CVest[[i]]
   }
-  out.cv <- list(PredScore=PredScore, Y=Y, X=X, Treatment=Treatment, family="binomial", nfold=nfold)
+  out.cv <- list(PredScore=PredScore, family="binomial")
   out.cv
 }
-
 
 #' @title Evaluation functions for cross-validated predictions
 #'
@@ -690,7 +943,7 @@ pact.cv <- function(p, nfold) {
 #' Y <- prostateCancer[,3:4]
 #' X <- prostateCancer[,5:9]
 #' Treatment <- prostateCancer[,2]
-#' p <- pact.fit(Y=Y, X=X, Treatment=Treatment, family="cox")
+#' p <- pact.fit(Y=Y, X=X, Treatment=Treatment, family="cox", varSelect="univar")
 #' cv <- pact.cv(p, nfold=5)
 #' \dontrun{eval.pact.cv(cv, method="discrete", g=log(0.80), perm.test=TRUE, nperm=100)}  ## At least 20% predicted reduction in HR classified as 'sensitive'
 #' eval.pact.cv(cv, method="continuous", plot.score=TRUE, perm.test=FALSE, nperm=100)
@@ -700,12 +953,12 @@ pact.cv <- function(p, nfold) {
 #' Y <- EORTC10994[,4]
 #' X <- EORTC10994[,c(2,5:7)]
 #' Treatment <- EORTC10994[,3]
-#' p <- pact.fit(Y=Y,X=X,Treatment=Treatment,family="binomial")
+#' p <- pact.fit(Y=Y,X=X,Treatment=Treatment,family="binomial", varSelect="univar")
 #' cv <- pact.cv(p, nfold=5)
 #' eval.pact.cv(cv, method="discrete", g=log(1), perm.test=TRUE, nperm=100)
 #' 
 #' 
-### Evaluation functions for cross-validation
+### Evaluation functions for pact model
 
 eval.pact.cv <- function(out.cv, method=c("discrete","continuous"), g=log(1), 
                          plot.score=TRUE, plot.time=NULL, perm.test=FALSE, nperm=100) {
@@ -716,12 +969,6 @@ eval.pact.cv <- function(out.cv, method=c("discrete","continuous"), g=log(1),
   this.call <- match.call()
   if (family == "cox") {
     if (method == "discrete") {
-      if (g < 0)
-        cat(paste("\n\n Finding subset of subjects predicted to benefit from E with atleast \n",(1-exp(g))*100,
-                  " % reduction in HR\n\n", sep=""))
-      if (g > 0)
-        cat(paste("\n\n Finding subset of subjects predicted no benefit from E with atleast \n",(exp(g)-1)*100,
-                    " % increase in HR\n\n", sep=""))
       eval.cv <- .eval.pact.cv.survival.discrete(out.cv, g, perm.test, nperm)
     }
     else {
@@ -734,12 +981,6 @@ eval.pact.cv <- function(out.cv, method=c("discrete","continuous"), g=log(1),
   else {
     if (family == "binomial") {
       if (method == "discrete") {
-        if (g > 0)
-          cat(paste("\n\n Finding subset of subjects predicted to benefit from E with atleast \n",(exp(g)-1)*100,
-                    " % increase in odds of response\n\n", sep=""))
-        if (g <= 0)
-          cat(paste("\n\n Finding subset of subjects predicted no benefit from E with atleast \n",(1-exp(g))*100,
-                    " % decrease in odds of response\n\n", sep=""))
         eval.cv <- .eval.pact.cv.binary.discrete(out.cv, g, perm.test, nperm)
       }
       else {
@@ -757,13 +998,14 @@ eval.pact.cv <- function(out.cv, method=c("discrete","continuous"), g=log(1),
 }
 
 
-### Internal cross-validation evaluation function. For survival response. Discretized scores.
+### Internal pact model evaluation function. For survival response. Discretized scores.
 .eval.pact.cv.survival.discrete <- function(out.cv, g, perm.test, nperm) {
   predscore <- out.cv$PredScore   ### predscore represents change in log HR (E to C)
   strata <- ifelse(predscore < g, 1, 0) ### 1=(predicted) benefit from T, 0=(predicted) no benefit from E
   Y <- out.cv$Y
   SurvObj <- Surv(Y[, "time"],Y[, "status"])
   T <- out.cv$Treatment
+  
   LR.Benefit <- survdiff(SurvObj ~ T, subset=(strata == 1))$chisq  ### LR statistic between control and new treatment groups for cases predicted to benefit from E
   LR.NoBenefit <- survdiff(SurvObj ~ T,subset=(strata == 0))$chisq  ### LR statistic between control and new treatment groups for cases predicted to not benefit from E
   
@@ -780,21 +1022,27 @@ eval.pact.cv <- function(out.cv, method=c("discrete","continuous"), g=log(1),
   
   if (perm.test) {  ### if permutation testing of LR statistic is desired
     X <- out.cv$X
+    nCovar <- out.cv$nCovar
+    nfold <- out.cv$nfold
+    varSelect <- out.cv$varSelect
+    nsig <- out.cv$nsig
+    cvfolds.varSelect <- out.cv$cvfolds.varSelect
+    which.lambda <- out.cv$which.lambda
+    
     dimx <- dim(X)
     nobs <- ifelse(is.null(dimx), length(X), dimx[1])
-    nCovar <- ifelse(is.null(dimx), 1, dimx[2])
-    nfold <- out.cv$nfold
-
+    
     permute.LR.Benefit <- vector("numeric", nperm)
     permute.LR.NoBenefit <- vector("numeric", nperm)
     fail.count1 <- 0
     fail.count2 <- 0
-    cat("Start Permutations \n\n")
+    cat("Starting Permutations..May take a few minutes to complete.. \n\n")
     for(i in (1:nperm)) {
       #### Generate a permutation of the treatment labels
       permute.T <- T[sample(nobs,nobs)]
       #### Cross-validated predictions for the permuted data
-      permute.PredTmnt.CV <- .pact.cv.survival(Y, X, permute.T, nfold)
+      permute.PredTmnt.CV <- .pact.cv.survival(Y, X, permute.T, nCovar, nfold, varSelect, nsig,
+                                               cvfolds.varSelect, which.lambda)
       permute.strata <- ifelse(permute.PredTmnt.CV$PredScore < g, 1, 0)  
       tryCatch(permute.LR.Benefit[i] <- survdiff(SurvObj ~ permute.T, subset=(permute.strata == 1))$chisq, error=function(err) fail.count1 <<- fail.count1+1)
       tryCatch(permute.LR.NoBenefit[i] <- survdiff(SurvObj ~ permute.T, subset=(permute.strata == 0))$chisq, error=function(err) fail.count2 <<- fail.count2+1)
@@ -815,9 +1063,11 @@ eval.pact.cv <- function(out.cv, method=c("discrete","continuous"), g=log(1),
 }
 
 ### Internal cross-validation evaluation function. For binary response. Discretized scores.
+
 .eval.pact.cv.binary.discrete <- function(out.cv, g, perm.test, nperm) {
   predscore <- out.cv$PredScore   ### predscore represents change in log odds (E to C)
   strata <- ifelse(predscore > g, 1, 0) ### 1=(predicted) benefit from E, 0=(predicted) no benefit from E
+
   Response <- out.cv$Y
   T <- out.cv$Treatment
   Sens.subset <- strata == 1
@@ -828,8 +1078,10 @@ eval.pact.cv <- function(out.cv, method=c("discrete","continuous"), g=log(1),
   
   Response.T.Benefit <- sum(Sens.subset & Response == 1 & T == 1, na.rm=TRUE)
   n.T.Benefit <- sum(Sens.subset & T == 1, na.rm=TRUE)
+
   Response.C.Benefit <- sum(Sens.subset & Response == 1 & T == 0, na.rm=TRUE)
   n.C.Benefit <- sum(Sens.subset & T == 0, na.rm=TRUE)
+
   test.Benefit <- prop.test(x=c(Response.T.Benefit, Response.C.Benefit), n=c(n.T.Benefit,n.C.Benefit))
   Benefit.teststat <- test.Benefit$statistic
   
@@ -846,21 +1098,27 @@ eval.pact.cv <- function(out.cv, method=c("discrete","continuous"), g=log(1),
   
   if (perm.test) {  ### if permutation testing of test statistics are desired
     X <- out.cv$X
+    nCovar <- out.cv$nCovar
+    nfold <- out.cv$nfold
+    varSelect <- out.cv$varSelect
+    nsig <- out.cv$nsig
+    cvfolds.varSelect <- out.cv$cvfolds.varSelect
+    which.lambda <- out.cv$which.lambda
+    
     dimx <- dim(X)
     nobs <- ifelse(is.null(dimx), length(X), dimx[1])
-    nCovar <- ifelse(is.null(dimx), 1, dimx[2])
-    nfold <- out.cv$nfold
-    
+        
     permute.teststat.Benefit <- vector("numeric", nperm)
     permute.teststat.NoBenefit <- vector("numeric", nperm)
     fail.count1 <- 0
     fail.count2 <- 0
-    cat("Start Permutations \n\n")
+    cat("Start Permutations..May take a few minutes to complete.. \n\n")
     for(i in (1:nperm)) {
       #### Generate a permutation of the treatment labels
       permute.T <- T[sample(nobs,nobs)]
       #### Cross-validated predictions for the permuted data
-      permute.PredTmnt.CV <- .pact.cv.binary(Response, X, permute.T, nfold)
+      permute.PredTmnt.CV <- .pact.cv.binary(Response, X, permute.T, nCovar, nfold, varSelect, nsig,
+                                             cvfolds.varSelect, which.lambda)
       permute.strata <- ifelse(permute.PredTmnt.CV$PredScore > g, 1, 0) 
       
       permute.sens.subset <- permute.strata == 1
@@ -894,12 +1152,12 @@ eval.pact.cv <- function(out.cv, method=c("discrete","continuous"), g=log(1),
   eval.cv.res  
 }
 
+
 .eval.pact.cv.survival.continuous <- function(out.cv, plot.score, plot.time, perm.test, nperm) {
   predscore <- out.cv$PredScore   ### predscore represents change in log HR (E to C)
   Y <- out.cv$Y
   SurvObj <- Surv(Y[, "time"],Y[, "status"])
   T <- out.cv$Treatment
-  nobs <- length(T)
   
   CoxReg <- coxph(SurvObj ~ T + predscore + T*predscore, na.action="na.exclude")
 
@@ -908,7 +1166,7 @@ eval.pact.cv <- function(out.cv, method=c("discrete","continuous"), g=log(1),
     lenq <- 4
 ### one plot per quantile as function of time
     newdata <- data.frame(T=as.factor(c(rep(c(1,0),lenq))), predscore=rep(score,each=2))
-    nr <- 2   ### no. of graph rows
+
     mat <- matrix(c(1:4,5,5),nrow=3,ncol=2,byrow=TRUE)
     layout(mat=mat, heights = c(rep.int(0.5,2),0.1))
     par(mar=c(3, 4, 4, 2)+0.1, font.lab=2, cex.lab=0.9, cex.main=0.9, cex.axis=0.9)
@@ -955,14 +1213,29 @@ eval.pact.cv <- function(out.cv, method=c("discrete","continuous"), g=log(1),
   }
 
   if (perm.test) {  ### if permutation testing is desired
+    X <- out.cv$X
+    nCovar <- out.cv$nCovar
+    nfold <- out.cv$nfold
+    varSelect <- out.cv$varSelect
+    nsig <- out.cv$nsig
+    cvfolds.varSelect <- out.cv$cvfolds.varSelect
+    which.lambda <- out.cv$which.lambda
+    
+    dimx <- dim(X)
+    nobs <- ifelse(is.null(dimx), length(X), dimx[1])
+    
     intercoef <- CoxReg$coef[3] ### The true interaction coeff
     permute.intercoef <- vector("numeric", nperm)
-    cat("Start Permutations\n\n")
+    cat("Start Permutations..May take a few minutes to complete.. \n\n")
     for(i in (1:nperm)) {
       #### Generate a permutation of the treatment labels
       permute.T <- T[sample(nobs,nobs)]
-      #### Model for permuted data
-      permute.CoxReg <- coxph(SurvObj ~ permute.T + predscore + permute.T*predscore, na.action="na.exclude")
+      permute.PredTmnt.CV <- .pact.cv.survival(Y, X, permute.T, nCovar, nfold, varSelect, nsig,
+                                               cvfolds.varSelect, which.lambda)
+      permute.predscore <- permute.PredTmnt.CV$PredScore
+      #### predscore model for permuted data
+      permute.CoxReg <- coxph(SurvObj ~ permute.T + permute.predscore + permute.T*permute.predscore, 
+                              na.action="na.exclude")
       permute.intercoef[i] <- permute.CoxReg$coef[3]
     }
     pval.twosided <- (1+sum(abs(permute.intercoef) > abs(intercoef), na.rm=TRUE))/(1+nperm)    
@@ -976,40 +1249,56 @@ eval.pact.cv <- function(out.cv, method=c("discrete","continuous"), g=log(1),
   eval.cv.res  
 }
 
+### Internal cross-validation evaluation function. For binary response. Discretized scores.
+
 .eval.pact.cv.binary.continuous <- function(out.cv, perm.test, nperm) {
   predscore <- out.cv$PredScore   ### predscore represents change in log odds (E to C)
   Response <- out.cv$Y
   T <- out.cv$Treatment
-  nobs <- length(T)
   
   LogReg <- glm(Response ~ T + predscore + T*predscore, 
                 family = binomial(link = "logit"), na.action="na.exclude")
   
   ### Probabiliy plot
   par(mfrow=c(1,1), mar=c(4, 4, 4, 5)+0.1, font.lab=2, cex.lab=0.8, cex.main=0.8, cex.axis=0.8)
-    ### generate a grid of score values
+  ### generate a grid of score values
   q <- seq(quantile(predscore,0.005,na.rm=TRUE), quantile(predscore,0.995,na.rm=TRUE), length.out=200)   
   lenq <- length(q)
   newdata.E <- data.frame(T=as.factor(rep(1,lenq)), predscore=q)
   newdata.C <- data.frame(T=as.factor(rep(0,lenq)), predscore=q)
-    ### Need to get prob.E and prob.C (prob of response with E and C respectively) for newdata
+  ### Need to get prob.E and prob.C (prob of response with E and C respectively) for newdata
   prob.E <- predict(LogReg,newdata.E,type="response")
   prob.C <- predict(LogReg,newdata.C,type="response")
   plot(prob.E ~ q, type="l", lwd=2, col="blue", xlab="Score", ylab=paste("Probability of response"),
        main=paste("Probability of Response"), ylim=c(0,1))
   lines(prob.C ~ q, lwd=2, col="red")
   legend("bottomright",legend=c("New Treatment (E)","Control (C)"),col=c("blue","red"),
-             lty=1,lwd=2,xpd=NA,bty="n",cex=0.8)
+         lty=1,lwd=2,xpd=NA,bty="n",cex=0.8)
   
   if (perm.test) {  ### if permutation testing is desired
+    X <- out.cv$X
+    nCovar <- out.cv$nCovar
+    nfold <- out.cv$nfold
+    varSelect <- out.cv$varSelect
+    nsig <- out.cv$nsig
+    cvfolds.varSelect <- out.cv$cvfolds.varSelect
+    which.lambda <- out.cv$which.lambda
+    
+    dimx <- dim(X)
+    nobs <- ifelse(is.null(dimx), length(X), dimx[1])
+    
     intercoef <- LogReg$coef[4] ### The true interaction coeff
     permute.intercoef <- vector("numeric", nperm)
-    cat("Start Permutations \n\n")
+    cat("Start Permutations..May take a few minutes to complete.. \n\n")
     for(i in (1:nperm)) {
       #### Generate a permutation of the treatment labels
       permute.T <- T[sample(nobs,nobs)]
-      #### Model for permuted data
-      permute.LogReg <- glm(Response ~ permute.T + predscore + permute.T*predscore, 
+      permute.PredTmnt.CV <- .pact.cv.binary(Response, X, permute.T, nCovar, nfold, varSelect, nsig,
+                                             cvfolds.varSelect, which.lambda)
+      permute.predscore <- permute.PredTmnt.CV$PredScore
+      
+      #### predscore model for permuted data
+      permute.LogReg <- glm(Response ~ permute.T + permute.predscore + permute.T*permute.predscore, 
                             family = binomial(link = "logit"), na.action="na.exclude")
       
       permute.intercoef[i] <- permute.LogReg$coef[4]
@@ -1020,7 +1309,7 @@ eval.pact.cv <- function(out.cv, method=c("discrete","continuous"), g=log(1),
   }
   if (perm.test)  
     eval.cv.res <- list(reg=summary(LogReg),pval.twosided=pval.twosided,pval.onesided=pval.onesided)
-  else
+  else ## No permutations, no p-values
     eval.cv.res <- list(reg=summary(LogReg))
   eval.cv.res  
 }
@@ -1044,8 +1333,6 @@ eval.pact.cv <- function(out.cv, method=c("discrete","continuous"), g=log(1),
 #' @return \item{nobs}{The sample size}
 #' @return \item{n.E}{Number of subjects getting the new treatment}
 #' @return \item{n.C}{Number of subjects getting the control treatment}
-#' @return \item{nCovar}{The number of predictor variables}
-#' @return \item{Covar.names}{The names of predictor variables}
 #' @return \item{LR}{The log-rank statistic for the overal difference in survival between
 #' E and C groups (for family="cox")}
 #' @return \item{LR.pval}{The p-value for LR based on the log-rank test (for family="cox")}
@@ -1063,7 +1350,7 @@ eval.pact.cv <- function(out.cv, method=c("discrete","continuous"), g=log(1),
 #' Y <- prostateCancer[,3:4]
 #' X <- prostateCancer[,5:9]
 #' Treatment <- prostateCancer[,2]
-#' p <- pact.fit(Y=Y, X=X, Treatment=Treatment, family="cox")
+#' p <- pact.fit(Y=Y, X=X, Treatment=Treatment, family="cox", varSelect="none")
 #' overall.analysis(p)
 #' 
 #' ### Binary response
@@ -1071,7 +1358,7 @@ eval.pact.cv <- function(out.cv, method=c("discrete","continuous"), g=log(1),
 #' Y <- EORTC10994[,4]
 #' X <- EORTC10994[,c(2,5:7)]
 #' Treatment <- EORTC10994[,3]
-#' p <- pact.fit(Y=Y,X=X,Treatment=Treatment,family="binomial")
+#' p <- pact.fit(Y=Y,X=X,Treatment=Treatment,family="binomial",varSelect="none")
 
 ### Function for overall analysis
 
@@ -1083,15 +1370,7 @@ overall.analysis <- function(p) { ### p=an object of class 'pact'
   Y <- p$Y
   T <- p$Treatment
   family <- p$family
-  
-  dimx <- dim(Covar)
-  nrowx <- ifelse(is.null(dimx), length(Covar), dimx[1])
-  nCovar <- ifelse(is.null(dimx), 1, dimx[2])
-  covar.names <- paste(colnames(Covar), collapse=", ")
-  
-  dimy <- dim(Y)
-  nrowy <- ifelse(is.null(dimy), length(Y), dimy[1])
-  nobs <- nrowy
+  nobs <- dim(as.matrix(Y))[1]
   
   n.T <- sum(T == 1,na.rm=TRUE)
   n.C <- sum(T == 0,na.rm=TRUE)
@@ -1109,8 +1388,6 @@ overall.analysis <- function(p) { ### p=an object of class 'pact'
                     "\n\nNumber of subjects: ", nobs,
                     "\n\nNumber of subjects assigned new treatment: ", n.T,
                     "\n\nNumber of subjects assigned standard treatment: ", n.C,
-                    "\n\nNumber of covariates: ", nCovar,
-                    "\n\nNames of covariates used in the analyis: ",covar.names, 
                     "\n\nOverall Analysis \n",
                     "--------------------\n\n",
                     "Response rate in the group administered new treatment: ",
@@ -1122,8 +1399,7 @@ overall.analysis <- function(p) { ### p=an object of class 'pact'
                     "\n\n",
                     sep="")
     cat(output)
-    outlist <- list(family=family, nobs=nobs, n.E=n.T, n.C=n.C, nCovar=nCovar, 
-                    covar.names=covar.names, RR.E=RR.T, RR.C=RR.C, RRdiff.pval=pval)
+    outlist <- list(family=family, nobs=nobs, n.E=n.T, n.C=n.C, RR.E=RR.T, RR.C=RR.C, RRdiff.pval=pval)
   } else {
     SurvObj <- Surv(Y[, "time"],Y[, "status"])
     sf <- survfit(SurvObj ~ Treatment)
@@ -1136,8 +1412,6 @@ overall.analysis <- function(p) { ### p=an object of class 'pact'
                     "\n\nNumber of subjects: ", nobs,
                     "\n\nNumber of subjects assigned new treatment: ", n.T,
                     "\n\nNumber of subjects assigned standard treatment: ", n.C,
-                    "\n\nNumber of covariates: ", nCovar,
-                    "\n\nNames of covariates used in the analyis: ",covar.names, 
                     "\n\nOverall Analysis:\n",
                     "--------------------\n\n",
                     "Log-rank statistic: ", round(LR.full,3),
@@ -1149,8 +1423,7 @@ overall.analysis <- function(p) { ### p=an object of class 'pact'
     plot(sf, col=c("red","blue"), lwd=2, main="Overall Analysis",
          xlab="Time", ylab="Proportion alive")
     legend("bottomleft", c("Standard Treatment", "New Treatment"), col=c("red","blue"), lty=1, lwd=2, bty="n", cex=1)
-    outlist <- list(family=family, nobs=nobs, n.E=n.T, n.C=n.C, nCovar=nCovar, 
-                    covar.names=covar.names, LR=LR.full, LR.pval=LR.pval)
+    outlist <- list(family=family, nobs=nobs, n.E=n.T, n.C=n.C, LR=LR.full, LR.pval=LR.pval)
   }
   ##outlist
 }
@@ -1197,4 +1470,27 @@ NULL
 #' @keywords datasets
 #' @format A data frame with 125 rows and 7 variables
 #' @name EORTC10994
+NULL
+
+#' GSE10846 dataset
+#' 
+#' A dataset containing the survival, treatment and gene expression data for 
+#' 412 patients with diffuse large B cell lymphoma and treated with CHOP or 
+#' CHOP+Rituximab
+#' 
+#' \itemize{
+#'   \item time. Survival time in months
+#'   \item status. Censoring status. '0' for censored, '1' for died
+#'   \item Treatment. Treatment received. '0' for control (CHOP) and '1' 
+#'   for new (CHOP+Rituximab)
+#'   \item Columns 4-1000 are gene expression values (normalized using
+#'    the MAS 5.0 software and log2 transformed) of the first 1000 genes  
+#'    highest variance
+#'   \item The row names are the array names
+#'   }
+#' 
+#' @docType data
+#' @keywords datasets
+#' @format A data frame with 412 rows and 1003 columns
+#' @name GSE10846
 NULL
