@@ -43,7 +43,7 @@
 #' Package: pact
 #' \cr Type: Package
 #' \cr Version: 0.5.0
-#' \cr Date: 2016-03-21
+#' \cr Date: 2016-04-14
 #' \cr Author: Dr. Jyothi Subramanian and Dr. Richard Simon
 #' \cr Maintainer: Jyothi Subramanian <\email{subramanianj01@@gmail.com}>
 #' \cr License: GPL-3

@@ -1,0 +1,298 @@
+\documentclass[11pt, a4paper]{article}
+\usepackage[a4paper,margin=1.15in,footskip=0.25in]{geometry}
+\usepackage{parskip}
+\usepackage{times}
+\usepackage{color}
+\renewcommand{\baselinestretch}{1.45} 
+
+% \VignetteIndexEntry{Predictive Analysis of Clinical Trials}
+
+\title{{\tt pact}: Predictive Analysis of Clinical Trials}
+\author{Richard Simon\\
+Jyothi Subramanian}
+
+\begin{document}
+\SweaveOpts{width=8, height=6, concordance=TRUE}
+
+\DefineVerbatimEnvironment{Sinput}{Verbatim}{fontfamily=tt, fontsize=\small, frame=single}
+\DefineVerbatimEnvironment{Soutput}{Verbatim}{fontfamily=tt, fontsize=\small, frame=leftline, rulecolor=\color{red}}
+\DefineVerbatimEnvironment{Scode}{Verbatim}{fontseries=m}
+\fvset{listparameters={\setlength{\topsep}{0pt}}}
+\renewenvironment{Schunk}{\vspace{\topsep}}{\vspace{\topsep}}
+
+\maketitle
+\section{Introduction}
+The objective of this vignette is to demonstrate the {\tt pact} R package. The methodology behind the functions in {\tt pact} will also be described briefly. For a more thorough scientific description of {\tt pact} including applications, the reader is referred to \cite{pact_rich}. 
+
+\section{Outline of Methodology}
+Based on response and covariate data from a randomized clinical trial comparing a new experimental treatment E versus a control C, the purpose behind the functions in {\tt pact} is to develop and internally validate a classifier that can identify subjects likely to benefit from E rather than C. Currently, survival and binary response types are permitted. Covariate data can be high-dimensional as well, and currently, the dimension reduction techniques lasso and univariate variable selection are implemented. These dimesion reduction options can be used with low-dimensional covariates too if the user so desires. The user can optionally specify a second (small) set of prognostic variables to always remain in the model. This set of variables will not be subjected to variable selection.
+
+In the case of a survival response, a Cox proportional hazards (PH) regression model is developed using data from all subjects in both E and C groups. Main effect of treatment, main effect of the fixed prognostic covariates, main and treatment by covariate interactions for the remaining covariates are considered for the model development:
+\begin{equation}
+\log\left[\frac{h(t)}{h_0(t)}\right]=\alpha z + \bar{\beta}_{0}^{'}\bar{x_f} + \bar{\beta}_{1}^{'}\bar{x_v} + \bar{\gamma}^{'} z\bar{x_v}
+\end{equation}
+Here $z$ is a treatment indicator with $z = 0$ for subjects assigned to group C and $z = 1$ for subjects assigned to group E. $\bar{x_f}$ denotes the vector of prognostic covariates that are fixed to remain in the model and $\bar{x_v}$ denotes the vector of the second set of covariates for which variable selection may be applied. So, $\bar{x_v}$ can be high-dimensional as well. Model (1) can be fit by maximizing the penalized log partial likelihood. 
+
+The evaluation of the model is done using K-fold cross-validation (CV). The difference in the log hazard for a subject
+with covariate vectors $\bar{x_f}$ and $\bar{x_v}$ receiving treatment E as compared to receiving treatment C can be estimated by $\delta(\bar{x_v}) = \hat{\alpha} + \hat{\bar{\gamma}^{'}}\bar{x_v}$. $\delta(\bar{x_v})$ is referred as the {\it predictive score} for the subject with covariate vectors $\bar{x_f}$ and $\bar{x_v}$. Lower predictive scores are indicative of benefit with E. Note that the expression for the predictive score does not explicitly contain terms involving $\bar{x_f}$. In each CV fold, the PH model (1) is developed from the training set. Variable selection, if any, is performed within the training set and estimates $\hat{\alpha}$ and $\hat{\bar{\gamma}}$ are found. These estimates are used to calculate the predictive scores for subjects in the test set. This is repeated for all the CV folds. Cross-validated predictive scores are thus obtained for all the subjects in the dataset. Various evaluation statistics can be calculated from these cross-validated predictive scores to give unbiased estimate of the performance of the model (1) for future samples.
+
+In the case of a binary response variable, a logistic regression model is developed instead of a PH regression model:
+\begin{equation}
+\log\left[\frac{p}{1-p}\right]=\alpha z + \bar{\beta}_{0}^{'}\bar{x_f} + \bar{\beta}_{1}^{'}\bar{x_v} + \bar{\gamma}^{'} z\bar{x}
+\end{equation}
+Here $p$ is the probability of a response. The other steps are the same as for survival response. Also, in the  case of a binary response, higher predictive scores are indicative of benefit with E.
+
+<<echo=false>>=
+options(width=72)
+options(continue=" ")
+set.seed(10)
+@
+
+\section{Usage and Examples}
+
+\subsection{Survival Response and High-dimensional Covariates}
+The GSE10846 dataset is used to illiustrate the application of {\tt pact} with a survival response variable and high-dimensional covariates. This dataset contains data on survival, treatment and gene expression of 1000 genes for 412 subjects with diffuse large B cell lymphoma. The subjects were randomized to treatment with either CHOP (control treatment, C) or CHOP+Rituximab (new treatment, E). 
+
+We first load the {\tt pact} package and the GSE10846 dataset.
+
+
+<<>>=
+library("pact")   ### Load the "pact" R-package
+
+data("GSE10846")  ### Load the dataset
+GSE10846[1:5,1:5] ### Display a piece of the data
+@
+
+The next step is to prepare the response $Y$, the covariates $X_f$, $X_v$ and the $Treatment$ variables. For a survival type response, $Y$ should be a two-column matrix with the columns named 'time' and 'status'. 'time' is the column of survival times and 'status' is a binary variable, with '1' indicating death, and '0' indicating right censored. Here, we do not have info on any prognostic variables that should be kept fixed in the model, hence $X_f$ is NULL (which is the default). $X_v$ is the $nobs$ by $p$ dataframe of covariates to be used for model development. Each row in $Y$ and $X_v$ corresponds to the data for a subject and each column in $X_v$ is a covariate. Additionally, $Treatment$ is a $nobs$ length treatment indicator, which is a factor, with a $1$ indicating that the subject was assigned to treatment E and $0$ indicating that the subject was assigned to treatment C.
+
+<<>>=
+Y <- GSE10846[,1:2]   ## Response, survival status
+Treatment <- as.factor(GSE10846[,3]) ## Treatment information
+Xv <- GSE10846[,-c(1:3)]   ## Covariates
+## No Xf. So Xf=NULL, the default
+@
+
+Once the variables are defined, a predictive model can be fit to the full dataset using function {\tt pact.fit}. Two variable selection method options are currently provided in {\tt pact.fit} to facilitate analysis of data with high-dimensional ($p > nobs$) covariates. The variable selection options can be specified using the {\tt varSelect} argument. The possible options for {\tt varSelect} are {\tt c("none", "univar", "lasso")}. Note that these variable selection can be used with low-dimensional data too, if the user so desires. 
+
+No variable selection is performed if {\tt varSelect = "none"}. If {\tt varSelect = "univar"}, univariate variable selection is performed. For each covariate $Xv_i$, a regression model is developed that includes, $Treatment$, $Xv_i$ and $Treatment*Xv_i$ interaction (if $Xf$ is not NULL, the main effect of variables in $Xf$ too are included in this regression model). The {\tt nsig} $Xv_i$s that have the lowest $Treatment*Xv_i$ interaction p-values are then used to develop the final predictive model. The variable selection parameter, {\tt nsig} is set by the user. 
+
+The output from {\tt pact.fit} is an object of class {\tt pact}. Objects of class {\tt pact} have {\tt summary}, {\tt print} and {\tt predict} methods defined.
+
+<<>>=
+### Fit predictive model using univariate variable selection
+p1 <- pact.fit(Y=Y, Xv=Xv, Treatment=Treatment, family="cox",  
+      varSelect="univar", nsig=5) 
+
+summary(p1) ## Display model coefficients
+
+print(p1)   ## Print the classification function
+@
+
+<<>>=
+### Model can be used to predict score for new subjects
+r <- rnorm(ncol(Xv))   ## Generate dummy covariate data for one new subject
+newXv <- Xv[1,]+r
+rownames(newXv) <- "New"
+
+predict(p1, newXv)     ## Now predict scores for this subject
+@
+
+If the option {\tt varSelect = "lasso"} is chosen, a penalized regression is carried out with the penalty factor chosen through a cross-validation procedure. The R functions {\tt glmnet} and {\tt cv.glmnet} \cite{glmnet1,glmnet2} are used in this case. The variable selection parameter, {\tt penalty.scaling} decides the amount of penalty to be applied to main effect cofficients as compared to interaction coefficients for $Xv$. The default value for {\tt penalty.scaling} is 0.5, which implies that the main effect coefficients are penalized half as much as the interaction coefficients. This default can be changed by the user. Variables, if any, in $Xf$ are not penalized.
+
+<<>>=
+### Fit predictive model using "lasso" with peanlty.scaling = 2
+p2 <- pact.fit(Y=Y, Xv=Xv, Treatment=Treatment, family="cox",  
+      varSelect="lasso", penalty.scaling=2)
+
+summary(p2) ## Display coefficients
+
+print(p2)   ## Print classification function
+@
+
+\subsection{Cross-validation and Model Evaluation}
+
+The function {\tt pact.cv} computes the cross-validated predictive score for each subject using K-fold cross-validation, with the same model development parameters as in {\tt pact.fit}. Evaluations of the cross-validated scores are performed using function {\tt eval.pact.cv}.
+
+<<>>=
+### Cross-validate the 'pact' model, p1
+cv1 <- pact.cv(p1, nfold=5)
+@
+
+<<label=figplot1, include=FALSE>>=
+### Evaluate with method="discrete" (Figure 1)
+e1 <- eval.pact.cv(cv1, method="discrete", g=log(0.80), perm.test=FALSE)
+@
+
+Two methods are currently implemented for computing the evaluation statistics from the cross-validated predictive scores, specified by setting the value for {\tt method}. In {\tt method= "discrete"}, the user specifies a value for the cutpoint {\tt g} to be applied to the cross-validated score to determine whether a subject can be considered to benefit from E or not. For {\tt family="cox"}, the predictive scores represent the change in the log hazard with treatment E as compared to treatment C. Hence, a cutoff {\tt g = log(0.80)}, for example, implies that subjects predicted to receive at least 20\% reduction in HR with E are classified to 'benefit' from E. Kaplan-Meier curves by $Treatment$ are plotted for the subjects predicted to be in the 'benefit' and 'no benefit' groups (Figure \ref{fig:one}). Log-rank statistics are computed for the 'benefit' and 'no benefit' groups.
+
+\begin{figure}
+\begin{center}
+<<label=fig1,fig=TRUE,echo=FALSE>>=
+<<figplot1>>
+  e1
+@
+\end{center}
+\caption{Figures after evaluation with {\tt method="discrete"}}
+\label{fig:one}
+\end{figure}
+
+In {\tt method="continuous"}, no cutoff is applied to the cross-validated scores. Instead, a PH model is developed that includes terms for the main effect of $Treatment$, main effect of cross-validated score and interaction effect of $Treatment$ by cross-validated score. From this model, two plots can be generated. The first plot (obtained by specifying {\tt plot.score=TRUE} in {\tt eval.pact.cv}) consists of KM curves by $Treatment$ for the 20th, 40th, 60th and 80th percentiles of the cross-validated predictive scores and depicts the differential effect of treatment as function of increasing cross-validated scores (Figure \ref{fig:two}). The second plot that can be generated is the plot of the probability of survival beyond a (user specified) landmark time as a function of the cross-validated score and $Treatment$ (obtained by specifying the landmark time for {\tt plot.time} in {\tt eval.pact.cv}) (Figure \ref{fig:three}). 
+
+
+<<label=figplot2,include=FALSE>>=
+### Evaluation with method="continuous". No cut-offs here.
+### Plot type 1: KM curves are plotted at the 20th, 40th, 60th and 80th
+### percenttiles of the cross-validated treatment scores (Figure 2)
+e21 <- eval.pact.cv(cv1, method="cont", plot.score=TRUE, perm.test=FALSE)
+@
+
+\begin{figure}
+\begin{center}
+<<label=fig2,fig=TRUE,echo=FALSE>>=
+<<figplot2>>
+  e21
+@
+\end{center}
+\caption{Figures after evaluation with {\tt method="continuous"} (type 1, plots at specified percentiles of cross-validated scores)}
+\label{fig:two}
+\end{figure}
+
+<<label=figplot3,include=FALSE>>=
+### Evaluate with method="continuous". Plot type 2: Prob[surv] beyond user 
+### specified landmark time as a function of the predictive score (Figure 3)
+e22 <- eval.pact.cv(cv1, method="cont", plot.score=FALSE, plot.time=12)
+@
+
+\begin{figure}
+\begin{center}
+<<label=fig3,fig=TRUE,echo=FALSE>>=
+<<figplot3>>
+  e22
+@
+\end{center}
+\caption{Figures after evaluation with {\tt method="continuous"} (type 2, probability of survival beyond landmark time)}
+\label{fig:three}
+\end{figure}
+
+
+\subsection{Specifying fixed prognostic covariates, i.e., $x_f$}
+The user can specify a small set of prognostic covariates to always remain in the model uing option  $Xf$. This would result in a predictive model that is adjusted for these prognostic covariates. We illustrate this application of {\tt pact} using the prostate cancer dataset. 
+
+<<>>=
+data("prostateCancer")
+head(prostateCancer)
+@
+
+Then specify the treatment, response and covariates.
+
+<<>>=
+Y <- prostateCancer[,3:4]  ## Survival response
+Xf <- prostateCancer[,7:8]  ## Prognostic covariates always in the model
+Xv <- prostateCancer[,c(5:6,9)]  ## Covariates for the predictive score
+Treatment <- as.factor(prostateCancer[,2])
+@
+
+Then fit the model.
+<<>>=
+### Fit predictive model, variable selection with "univar"
+p11 <- pact.fit(Y=Y, Xf=Xf, Xv=Xv, Treatment=Treatment, family="cox",
+                varSelect="univar")
+### And display it
+summary(p11)
+### Print 
+print(p11)
+@
+
+<<>>=
+### Model can be used to predict score for new subjects
+### We only need to specify variables in Xv for new subjects
+
+newXv <- data.frame(age=c(60,70), 
+                   pf=c("Normal.Activity","Limited.Activity"),
+                   ap=c(0.5,0.5))
+predict(p11, newXv)
+@
+
+\subsection{Binary Response}
+The application of {\tt pact} for a data with binary response variable is illustrated with the EORTC10994 data set. This dataset contains treatment, response and covariate information for 125 subjects with breast cancer. The covariate dimension is low, as there are only 4 covariates. The binary response $Y$, the predictor $Xv$ and the $Treatment$ variables are first defined. $Xf$ is not present (equals NULL).
+
+<<>>=
+data("EORTC10994")
+head(EORTC10994, n=4)
+Y <- EORTC10994[,4]   ## Response
+Xv <- EORTC10994[,c(2,5,6,7)]  ## Variables in Xv
+Treatment <- as.factor(EORTC10994[,3])   ## Treatment
+@
+
+For fitting the predictive model for a binary response, the option is {\tt family="binomial"} in {\tt pact.fit}. Cross-validated predictive scores can be obtained using {\tt pact.cv} and evaluation statistics can be obtained through {\tt eval.pact.cv}. With {\tt method="discrete"} option in {\tt eval.pact.cv}, the cross-validated estimates of response rates with E and C are displayed for the subset predicted to 'benefit', as well as the subset predicted 'no benefit' from E. If {\tt method="continuous"} is chosen in {\tt eval.pact.cv}, a logistic regression model is developed that includes the main effect of $Treatment$, main effect of cross-validated score and interaction effect of $Treatment$ by cross-validated score. From this model, a graph is produced depicting the probability of response as a function of the cross-validated score and $Treatment$ (Figure \ref{fig:four}). 
+
+<<>>=
+### Fit predictive model, no variable selection
+pbin <- pact.fit(Y=Y, Xv=Xv, Treatment=Treatment, family="binomial", 
+               varSelect="none") 
+
+### Evaluate the model using K-fold CV and method="discrete"
+cvbin <- pact.cv(pbin, nfold=5)
+e3 <- eval.pact.cv(cvbin, method="discrete", g=log(1), perm.test=FALSE)
+e3
+@
+
+<<label=figplot4,include=FALSE>>=
+### Evaluation for binary response with method="continuous". 
+### Plot: Probability of response as a function of cross-validated
+### predictive score (Figure 4)
+e4 <- eval.pact.cv(cvbin, method="continuous", perm.test=FALSE)
+@
+
+\begin{figure}
+\begin{center}
+<<label=fig4,fig=TRUE,echo=FALSE>>=
+<<figplot4>>
+  e4
+@
+\end{center}
+\caption{Figure after evaluation with {\tt method="continuous"}: probability of response as a function of predictive score}
+\label{fig:four}
+\end{figure}
+
+\subsection{Permutation Tests for Treatment Effects}
+Permutation based testing for statistical significance of interaction effects of cross-validated scores and $Treatment$ can be carried out by specifying {\tt perm.test=TRUE} in {\tt eval.pact.cv}. The number of permutations can be set using the {\tt nperm} option. At least 500 to 1000 permutations are recommended.
+\subsubsection{Evaluation Method: Discrete}
+In the case of a survival response, permutation based p-values for differential treatment effects are computed separately for the subset predicted to 'benefit' as well as for the subset predicted 'no benefit' from E. The statistic used is the log rank statistic. 
+
+In the case of a binary response, permutation based p-values are computed for testing the null hypothesis that response rates are the same with treatments E and C. A chi-square test statistic is used. Permutation p-values are computed for subsets predicted to 'benefit' as well as predicted 'no benefit' from E.
+
+\subsubsection{Evaluation Method: Continuous}
+If {\tt method="continuous"} is chosen in {\tt eval.pact.cv}, a permutation based test is performed to test the null hypothesis that the interaction coefficient of $Treatment$ and cross-validated score is zero in the regression model that was developed using main effect of $Treatment$, main effect of cross-validated score and interaction effect of $Treatment$ and cross-validated score. 
+
+<<label=perm, include=FALSE>>=
+### Permutation test examples (survival response): method="discrete"
+e5 <- eval.pact.cv(cvbin, method="discrete", g=log(1), 
+          perm.test=TRUE, nperm=500)
+e5  ### (or print(e5))
+
+### Permutation test examples (survival response): method="continuous"
+e6 <- eval.pact.cv(cvbin, method="continuous", perm.test=TRUE, nperm=500)
+e6  ### (or print(e6))
+@
+
+\begin{thebibliography}{9}
+
+  \bibitem{pact_rich}
+	  Simon R (2012),
+	  \emph{Clinical Trials for Predictive Medicine.}
+	  Statistics in Medicine, 31(25): 3031-40.
+    
+  \bibitem{glmnet1}
+ Jerome Friedman, Trevor Hastie, Robert Tibshirani (2010). \emph{Regularization Paths
+  for Generalized Linear Models via Coordinate Descent.} Journal of Statistical
+  Software, 33(1): 1-22. URL http://www.jstatsoft.org/v33/i01/.
+  
+  \bibitem{glmnet2}
+  Noah Simon, Jerome Friedman, Trevor Hastie, Rob Tibshirani (2011).
+  \emph{Regularization Paths for Cox's Proportional Hazards Model via Coordinate
+  Descent.} Journal of Statistical Software, 39(5), 1-13. URL
+  http://www.jstatsoft.org/v39/i05/.
+\end{thebibliography}
+
+\end{document}
