@@ -268,11 +268,11 @@ If {\tt method="continuous"} is chosen in {\tt eval.pact.cv}, a permutation base
 <<label=perm, include=FALSE>>=
 ### Permutation test examples (survival response): method="discrete"
 e5 <- eval.pact.cv(cvbin, method="discrete", g=log(1), 
-          perm.test=TRUE, nperm=500)
+          perm.test=TRUE, nperm=100)
 e5  ### (or print(e5))
 
 ### Permutation test examples (survival response): method="continuous"
-e6 <- eval.pact.cv(cvbin, method="continuous", perm.test=TRUE, nperm=500)
+e6 <- eval.pact.cv(cvbin, method="continuous", perm.test=TRUE, nperm=100)
 e6  ### (or print(e6))
 @
 
